@@ -76,6 +76,7 @@ export default function Home() {
       username={userDoc.username}
       gold={userDoc.gold}
       energy={userDoc.energy}
+      combatTotals={userDoc.effectiveStats}
     />
   );
 }

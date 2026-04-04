@@ -3,9 +3,20 @@ import {
   getDoc,
   setDoc,
   serverTimestamp,
+  updateDoc,
   type Timestamp,
 } from "firebase/firestore";
+import type { EquippedState, Item } from "@/types/item";
+import { EMPTY_EQUIPPED } from "@/types/item";
 import { getDb } from "./firebase";
+import type { CombatTotals } from "./inventoryUtils";
+import {
+  getEffectiveCombatTotals,
+  parseEquipped,
+  parseInventory,
+  parseStoredEffectiveStats,
+  STARTER_ITEMS,
+} from "./inventoryUtils";
 
 export const INITIAL_USER_GOLD = 100;
 export const INITIAL_USER_ENERGY = 20;
@@ -16,6 +27,10 @@ export type UserDocument = {
   stats: unknown | null;
   gold: number;
   energy: number;
+  inventory: Item[];
+  equipped: EquippedState;
+  /** Denormalized base + equipment; kept in sync via persistEffectiveCombatStats. */
+  effectiveStats: CombatTotals;
   createdAt: Timestamp | null;
 };
 
@@ -28,22 +43,62 @@ function readGoldEnergy(data: Record<string, unknown> | undefined) {
   };
 }
 
+function resolveEffectiveStats(
+  ref: ReturnType<typeof doc>,
+  data: Record<string, unknown>,
+  inventory: Item[],
+  equipped: EquippedState,
+  stats: unknown,
+): CombatTotals {
+  const stored = parseStoredEffectiveStats(data.effectiveStats);
+  const computed = getEffectiveCombatTotals({
+    stats,
+    inventory,
+    equipped,
+  });
+  if (!stored) {
+    void updateDoc(ref, { effectiveStats: computed });
+    return computed;
+  }
+  return stored;
+}
+
 export async function getOrCreateUser(uid: string): Promise<UserDocument> {
   const ref = doc(getDb(), "users", uid);
   const snap = await getDoc(ref);
 
   if (snap.exists()) {
-    const data = snap.data();
+    const data = snap.data() as Record<string, unknown>;
     const { gold, energy } = readGoldEnergy(data);
+    const inventory = parseInventory(data.inventory);
+    const equipped = parseEquipped(data.equipped);
+    const stats = data.stats ?? null;
+    const effectiveStats = resolveEffectiveStats(
+      ref,
+      data,
+      inventory,
+      equipped,
+      stats,
+    );
     return {
-      username: data.username ?? null,
-      class: data.class ?? null,
-      stats: data.stats ?? null,
+      username: (data.username as string | undefined) ?? null,
+      class: (data.class as string | undefined) ?? null,
+      stats,
       gold,
       energy,
-      createdAt: data.createdAt ?? null,
+      inventory,
+      equipped,
+      effectiveStats,
+      createdAt: (data.createdAt as Timestamp | undefined) ?? null,
     };
   }
+
+  const equippedNew: EquippedState = { ...EMPTY_EQUIPPED };
+  const effectiveStats = getEffectiveCombatTotals({
+    stats: null,
+    inventory: STARTER_ITEMS,
+    equipped: equippedNew,
+  });
 
   const newUser: Omit<UserDocument, "createdAt"> & {
     createdAt: ReturnType<typeof serverTimestamp>;
@@ -53,20 +108,29 @@ export async function getOrCreateUser(uid: string): Promise<UserDocument> {
     stats: null,
     gold: INITIAL_USER_GOLD,
     energy: INITIAL_USER_ENERGY,
+    inventory: STARTER_ITEMS,
+    equipped: equippedNew,
+    effectiveStats,
     createdAt: serverTimestamp(),
   };
 
   await setDoc(ref, newUser);
 
   const created = await getDoc(ref);
-  const data = created.data();
-  const { gold, energy } = readGoldEnergy(data);
+  const d = created.data() as Record<string, unknown>;
+  const { gold, energy } = readGoldEnergy(d);
+  const inventory = parseInventory(d.inventory);
+  const equipped = parseEquipped(d.equipped);
+  const stats = d.stats ?? null;
   return {
-    username: data?.username ?? null,
-    class: data?.class ?? null,
-    stats: data?.stats ?? null,
+    username: (d.username as string | undefined) ?? null,
+    class: (d.class as string | undefined) ?? null,
+    stats,
     gold,
     energy,
-    createdAt: data?.createdAt ?? null,
+    inventory,
+    equipped,
+    effectiveStats: parseStoredEffectiveStats(d.effectiveStats) ?? effectiveStats,
+    createdAt: (d.createdAt as Timestamp | undefined) ?? null,
   };
 }

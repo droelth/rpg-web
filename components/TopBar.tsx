@@ -1,11 +1,14 @@
 "use client";
 
+import type { CombatTotals } from "@/lib/inventoryUtils";
+
 export type TopBarProps = {
   level?: number;
   username: string;
   gold: number;
   energy: number;
   energyMax: number;
+  combatTotals: CombatTotals;
 };
 
 function CoinIcon({ className }: { className?: string }) {
@@ -52,6 +55,7 @@ export function TopBar({
   gold,
   energy,
   energyMax,
+  combatTotals,
 }: TopBarProps) {
   return (
     <header className="relative z-20 mx-3 mt-3 shrink-0 rounded-2xl border border-white/10 bg-black/45 px-3 py-2.5 shadow-[0_0_24px_rgba(0,0,0,0.45),inset_0_1px_0_rgba(255,255,255,0.06)] backdrop-blur-md">
@@ -87,6 +91,23 @@ export function TopBar({
             </span>
           </div>
         </div>
+      </div>
+      <div
+        className="mt-2 flex flex-wrap justify-center gap-x-3 gap-y-1 border-t border-white/5 pt-2 text-[10px] tabular-nums text-zinc-400"
+        title="Combat stats"
+      >
+        <span>
+          HP <strong className="text-zinc-200">{combatTotals.hp}</strong>
+        </span>
+        <span>
+          ATK <strong className="text-zinc-200">{combatTotals.atk}</strong>
+        </span>
+        <span>
+          DEF <strong className="text-zinc-200">{combatTotals.def}</strong>
+        </span>
+        <span>
+          CRIT <strong className="text-zinc-200">{combatTotals.crit}</strong>
+        </span>
       </div>
     </header>
   );

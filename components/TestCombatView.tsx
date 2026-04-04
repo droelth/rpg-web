@@ -11,6 +11,7 @@ import {
   type Stats,
 } from "@/lib/combat";
 import { getOrCreateUser } from "@/lib/getOrCreateUser";
+import { ensureInventoryDefaults } from "@/lib/inventoryUtils";
 import { useAuth } from "@/hooks/useAuth";
 
 const DUMMY_TEMPLATE: Fighter = {
@@ -23,20 +24,6 @@ function cloneFighter(f: Fighter): Fighter {
   return {
     ...f,
     stats: { ...f.stats },
-  };
-}
-
-function statsFromFirestore(raw: unknown): Stats {
-  if (!raw || typeof raw !== "object") {
-    return { hp: 30, atk: 6, def: 4, crit: 10 };
-  }
-  const s = raw as Record<string, unknown>;
-  const n = (v: unknown, d: number) => (typeof v === "number" ? v : d);
-  return {
-    hp: n(s.hp, 30),
-    atk: n(s.atk, 6),
-    def: n(s.def, 4),
-    crit: n(s.crit, 10),
   };
 }
 
@@ -64,10 +51,11 @@ export function TestCombatView() {
     let cancelled = false;
     (async () => {
       try {
-        const doc = await getOrCreateUser(user.uid);
+        await ensureInventoryDefaults(user.uid);
+        const userDoc = await getOrCreateUser(user.uid);
         if (cancelled) return;
-        const stats = statsFromFirestore(doc.stats);
-        const name = doc.username?.trim() || "Player";
+        const stats: Stats = { ...userDoc.effectiveStats };
+        const name = userDoc.username?.trim() || "Player";
         const p: Fighter = {
           name,
           stats,

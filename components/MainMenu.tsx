@@ -1,7 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { INITIAL_USER_ENERGY } from "@/lib/getOrCreateUser";
+import type { CombatTotals } from "@/lib/inventoryUtils";
 import { ActionButton } from "@/components/ActionButton";
 import { TopBar } from "@/components/TopBar";
 
@@ -9,6 +11,7 @@ export type MainMenuProps = {
   username: string;
   gold: number;
   energy: number;
+  combatTotals: CombatTotals;
 };
 
 function PvpIcon() {
@@ -104,7 +107,8 @@ function ProfileIcon() {
   );
 }
 
-export function MainMenu({ username, gold, energy }: MainMenuProps) {
+export function MainMenu({ username, gold, energy, combatTotals }: MainMenuProps) {
+  const router = useRouter();
   const energyMax = INITIAL_USER_ENERGY;
   const noop = () => {};
 
@@ -129,6 +133,7 @@ export function MainMenu({ username, gold, energy }: MainMenuProps) {
           gold={gold}
           energy={energy}
           energyMax={energyMax}
+          combatTotals={combatTotals}
         />
 
         <div className="min-h-4 flex-1" aria-hidden />
@@ -160,7 +165,7 @@ export function MainMenu({ username, gold, energy }: MainMenuProps) {
             label="Inventory"
             theme="inventory"
             icon={<InventoryIcon />}
-            onClick={noop}
+            onClick={() => router.push("/inventory")}
           />
           <ActionButton
             label="Tavern"

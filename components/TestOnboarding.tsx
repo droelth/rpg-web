@@ -7,6 +7,7 @@ import {
   INITIAL_USER_ENERGY,
   INITIAL_USER_GOLD,
 } from "@/lib/getOrCreateUser";
+import { persistEffectiveCombatStats } from "@/lib/inventoryUtils";
 import { DEFAULT_HERO_ID, HERO_CLASSES } from "@/lib/heroClasses";
 import { HeroSlider } from "@/components/HeroSlider";
 import { UsernameInput } from "@/components/UsernameInput";
@@ -46,6 +47,7 @@ export function TestOnboarding({ uid, onSaved }: TestOnboardingProps) {
         gold: INITIAL_USER_GOLD,
         energy: INITIAL_USER_ENERGY,
       });
+      await persistEffectiveCombatStats(uid);
       onSaved();
     } catch (e) {
       console.error(e);
