@@ -1,4 +1,11 @@
-import type { InventoryInstance, Item, ItemRarity, ItemType } from "@/types/item";
+import type {
+  InventoryInstance,
+  Item,
+  ItemRarity,
+  ItemStats,
+  ItemType,
+} from "@/types/item";
+import { SLOT_ORDER } from "@/types/item";
 
 const ITEM_RARITIES: readonly ItemRarity[] = [
   "common",
@@ -12,154 +19,238 @@ function isValidItemRarity(v: unknown): v is ItemRarity {
   return typeof v === "string" && ITEM_RARITIES.includes(v as ItemRarity);
 }
 
-/**
- * Single source of truth for item definitions.
- * Inventory rows are `InventoryInstance`; equipped slots reference `instanceId`.
- */
-export const items: Record<string, Item> = {
-  warrior_sword_1: {
-    id: "warrior_sword_1",
-    name: "Iron Sword",
-    type: "weapon",
-    rarity: "common",
-    classes: ["warrior"],
-    stats: { atk: 3 },
-  },
-  warrior_armor_1: {
-    id: "warrior_armor_1",
-    name: "Leather Armor",
-    type: "armor",
-    rarity: "common",
-    classes: ["warrior"],
-    stats: { def: 2 },
-  },
-  warrior_helmet_1: {
-    id: "warrior_helmet_1",
-    name: "Iron Helm",
-    type: "helmet",
-    rarity: "common",
-    classes: ["warrior"],
-    stats: { def: 1, hp: 2 },
-  },
-  warrior_ring_1: {
-    id: "warrior_ring_1",
-    name: "Ring of Might",
-    type: "ring",
-    rarity: "common",
-    classes: ["warrior"],
-    stats: { atk: 1 },
-  },
+/** Per-slot stat rows: common → legendary (epic = “unique” in design docs). */
+type ClassTierTable = Record<ItemType, Record<ItemRarity, ItemStats>>;
 
-  mage_staff_1: {
-    id: "mage_staff_1",
-    name: "Oak Staff",
-    type: "weapon",
-    rarity: "common",
-    classes: ["mage"],
-    stats: { atk: 4 },
-  },
-  mage_robes_1: {
-    id: "mage_robes_1",
-    name: "Apprentice Robes",
-    type: "armor",
-    rarity: "common",
-    classes: ["mage"],
-    stats: { def: 1 },
-  },
-  mage_circlet_1: {
-    id: "mage_circlet_1",
-    name: "Scholar’s Circlet",
-    type: "helmet",
-    rarity: "common",
-    classes: ["mage"],
-    stats: { crit: 2 },
-  },
-  mage_ring_1: {
-    id: "mage_ring_1",
-    name: "Ring of Focus",
-    type: "ring",
-    rarity: "common",
-    classes: ["mage"],
-    stats: { atk: 1, crit: 1 },
-  },
+function buildClassGear(
+  cls: string,
+  names: Record<ItemType, string>,
+  tiersBySlot: ClassTierTable,
+): Record<string, Item> {
+  const out: Record<string, Item> = {};
+  for (const type of SLOT_ORDER) {
+    const tiers = tiersBySlot[type];
+    const id = `${cls}_${type}`;
+    out[id] = {
+      id,
+      name: names[type],
+      type,
+      rarity: "common",
+      classes: [cls],
+      stats: { ...tiers.common },
+      statsByRarity: {
+        common: { ...tiers.common },
+        uncommon: { ...tiers.uncommon },
+        rare: { ...tiers.rare },
+        epic: { ...tiers.epic },
+        legendary: { ...tiers.legendary },
+      },
+    };
+  }
+  return out;
+}
 
-  ranger_bow_1: {
-    id: "ranger_bow_1",
-    name: "Hunter’s Bow",
-    type: "weapon",
-    rarity: "common",
-    classes: ["ranger"],
-    stats: { atk: 3, crit: 1 },
+/** Warrior (balanced bruiser) — design table. */
+const WARRIOR_TIERS: ClassTierTable = {
+  weapon: {
+    common: { atk: 3 },
+    uncommon: { atk: 5 },
+    rare: { atk: 7, def: 2 },
+    epic: { atk: 10, def: 3 },
+    legendary: { atk: 13, def: 4 },
   },
-  ranger_tunic_1: {
-    id: "ranger_tunic_1",
-    name: "Forest Tunic",
-    type: "armor",
-    rarity: "common",
-    classes: ["ranger"],
-    stats: { def: 2 },
+  armor: {
+    common: { def: 2 },
+    uncommon: { def: 3 },
+    rare: { def: 5, hp: 3 },
+    epic: { def: 7, hp: 5 },
+    legendary: { def: 10, hp: 8 },
   },
-  ranger_hood_1: {
-    id: "ranger_hood_1",
-    name: "Leather Hood",
-    type: "helmet",
-    rarity: "common",
-    classes: ["ranger"],
-    stats: { def: 1 },
+  helmet: {
+    common: { hp: 3 },
+    uncommon: { hp: 5 },
+    rare: { hp: 7, def: 1 },
+    epic: { hp: 10, def: 2 },
+    legendary: { hp: 14, def: 3 },
   },
-  ranger_ring_1: {
-    id: "ranger_ring_1",
-    name: "Ring of Precision",
-    type: "ring",
-    rarity: "common",
-    classes: ["ranger"],
-    stats: { crit: 2 },
-  },
-
-  paladin_mace_1: {
-    id: "paladin_mace_1",
-    name: "Blessed Mace",
-    type: "weapon",
-    rarity: "common",
-    classes: ["paladin"],
-    stats: { atk: 2, def: 1 },
-  },
-  paladin_mail_1: {
-    id: "paladin_mail_1",
-    name: "Chain Mail",
-    type: "armor",
-    rarity: "common",
-    classes: ["paladin"],
-    stats: { def: 3 },
-  },
-  paladin_helm_1: {
-    id: "paladin_helm_1",
-    name: "Aegis Helm",
-    type: "helmet",
-    rarity: "common",
-    classes: ["paladin"],
-    stats: { hp: 3, def: 1 },
-  },
-  paladin_ring_1: {
-    id: "paladin_ring_1",
-    name: "Ring of Warding",
-    type: "ring",
-    rarity: "common",
-    classes: ["paladin"],
-    stats: { def: 1, hp: 2 },
+  ring: {
+    common: { crit: 1 },
+    uncommon: { crit: 2 },
+    rare: { crit: 3, atk: 1 },
+    epic: { crit: 5, atk: 2 },
+    legendary: { crit: 7, atk: 3 },
   },
 };
 
-/** Default inventory for new users / empty inventory (IDs only). */
-export const STARTER_INVENTORY_IDS: readonly string[] = [
-  "warrior_sword_1",
-  "warrior_armor_1",
-];
+/** Mage — design table. */
+const MAGE_TIERS: ClassTierTable = {
+  weapon: {
+    common: { atk: 4 },
+    uncommon: { atk: 6 },
+    rare: { atk: 8, crit: 2 },
+    epic: { atk: 11, crit: 4 },
+    legendary: { atk: 14, crit: 6 },
+  },
+  armor: {
+    common: { def: 1 },
+    uncommon: { def: 2 },
+    rare: { def: 3, hp: 2 },
+    epic: { def: 4, hp: 4 },
+    legendary: { def: 6, hp: 6 },
+  },
+  helmet: {
+    common: { def: 1 },
+    uncommon: { def: 2 },
+    rare: { def: 3, hp: 2 },
+    epic: { def: 4, hp: 4 },
+    legendary: { def: 6, hp: 6 },
+  },
+  ring: {
+    common: { crit: 1 },
+    uncommon: { crit: 2 },
+    rare: { crit: 4 },
+    epic: { crit: 6, atk: 2 },
+    legendary: { crit: 10, atk: 4 },
+  },
+};
+
+/** Ranger (crit / hybrid) — design table. */
+const RANGER_TIERS: ClassTierTable = {
+  weapon: {
+    common: { atk: 4 },
+    uncommon: { atk: 6 },
+    rare: { atk: 8, crit: 3 },
+    epic: { atk: 11, crit: 5 },
+    legendary: { atk: 14, crit: 7 },
+  },
+  armor: {
+    common: { def: 1 },
+    uncommon: { def: 2 },
+    rare: { def: 3, hp: 2 },
+    epic: { def: 4, hp: 4 },
+    legendary: { def: 6, hp: 6 },
+  },
+  helmet: {
+    common: { crit: 2 },
+    uncommon: { crit: 3 },
+    rare: { crit: 5, hp: 2 },
+    epic: { crit: 7, hp: 3 },
+    legendary: { crit: 10, hp: 5 },
+  },
+  ring: {
+    common: { crit: 2 },
+    uncommon: { crit: 3 },
+    rare: { crit: 5, atk: 2 },
+    epic: { crit: 7, atk: 3 },
+    legendary: { crit: 10, atk: 4 },
+  },
+};
+
+/** Paladin (tank / sustain) — design table. */
+const PALADIN_TIERS: ClassTierTable = {
+  weapon: {
+    common: { atk: 2 },
+    uncommon: { atk: 3 },
+    rare: { atk: 4, def: 2 },
+    epic: { atk: 6, def: 3 },
+    legendary: { atk: 8, def: 4 },
+  },
+  armor: {
+    common: { def: 3 },
+    uncommon: { def: 5 },
+    rare: { def: 7, hp: 4 },
+    epic: { def: 10, hp: 7 },
+    legendary: { def: 14, hp: 10 },
+  },
+  helmet: {
+    common: { hp: 4 },
+    uncommon: { hp: 6 },
+    rare: { hp: 9, def: 2 },
+    epic: { hp: 12, def: 3 },
+    legendary: { hp: 16, def: 4 },
+  },
+  ring: {
+    common: { hp: 3 },
+    uncommon: { hp: 5 },
+    rare: { hp: 7, def: 1 },
+    epic: { hp: 10, def: 2 },
+    legendary: { hp: 14, def: 3 },
+  },
+};
+
+/**
+ * Single source of truth for item definitions.
+ * Inventory rows are `InventoryInstance`; equipped slots reference `instanceId`.
+ * Each class has one catalog id per slot; instance `rarity` selects the tier row in `statsByRarity`.
+ */
+export const items: Record<string, Item> = {
+  ...buildClassGear("warrior", {
+    weapon: "Warrior Blade",
+    armor: "Battle Plate",
+    helmet: "Soldier Helm",
+    ring: "Brawler Ring",
+  }, WARRIOR_TIERS),
+  ...buildClassGear("mage", {
+    weapon: "Arcane Rod",
+    armor: "Scholar Robes",
+    helmet: "Mage Circlet",
+    ring: "Focus Ring",
+  }, MAGE_TIERS),
+  ...buildClassGear("ranger", {
+    weapon: "Ranger Longbow",
+    armor: "Scout Vest",
+    helmet: "Hawkeye Hood",
+    ring: "Precision Ring",
+  }, RANGER_TIERS),
+  ...buildClassGear("paladin", {
+    weapon: "Sanctified Mace",
+    armor: "Aegis Mail",
+    helmet: "Templar Helm",
+    ring: "Sanctuary Band",
+  }, PALADIN_TIERS),
+};
+
+/** Weapon + armor granted per hero class (matches onboarding / empty-inventory fill). */
+const STARTER_INVENTORY_BY_CLASS: Record<string, readonly [string, string]> = {
+  warrior: ["warrior_weapon", "warrior_armor"],
+  mage: ["mage_weapon", "mage_armor"],
+  ranger: ["ranger_weapon", "ranger_armor"],
+  paladin: ["paladin_weapon", "paladin_armor"],
+};
+
+/** Default starter ids when class is unknown (pre-onboarding). */
+export const STARTER_INVENTORY_IDS: readonly string[] =
+  STARTER_INVENTORY_BY_CLASS.warrior;
+
+/** Catalog ids for a class’s starter weapon + armor; falls back to warrior. */
+export function starterInventoryIdsForClass(
+  classId: string | null | undefined,
+): readonly string[] {
+  const key = (classId ?? "").toLowerCase();
+  const pair = STARTER_INVENTORY_BY_CLASS[key];
+  return pair ?? STARTER_INVENTORY_BY_CLASS.warrior;
+}
 
 /** Map legacy stored ids to current catalog ids. */
 const LEGACY_ITEM_ID_MAP: Record<string, string> = {
-  sword_1: "warrior_sword_1",
-  armor_1: "warrior_armor_1",
+  sword_1: "warrior_weapon",
+  armor_1: "warrior_armor",
+  warrior_sword_1: "warrior_weapon",
+  warrior_armor_1: "warrior_armor",
+  warrior_helmet_1: "warrior_helmet",
+  warrior_ring_1: "warrior_ring",
+  mage_staff_1: "mage_weapon",
+  mage_robes_1: "mage_armor",
+  mage_circlet_1: "mage_helmet",
+  mage_ring_1: "mage_ring",
+  ranger_bow_1: "ranger_weapon",
+  ranger_tunic_1: "ranger_armor",
+  ranger_hood_1: "ranger_helmet",
+  ranger_ring_1: "ranger_ring",
+  paladin_mace_1: "paladin_weapon",
+  paladin_mail_1: "paladin_armor",
+  paladin_helm_1: "paladin_helmet",
+  paladin_ring_1: "paladin_ring",
 };
 
 /** Normalize any raw id string to a key in `items`, or null if unknown. */
@@ -191,9 +282,14 @@ export function generateInstanceId(): string {
   return `inst_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
 }
 
-/** New user / empty-inventory starter rows (call when persisting to Firestore). */
-export function createStarterInventory(): InventoryInstance[] {
-  return STARTER_INVENTORY_IDS.map((itemId) => ({
+/**
+ * New user / empty-inventory starter rows (call when persisting to Firestore).
+ * Pass hero `classId` when known; otherwise uses warrior-equivalent default.
+ */
+export function createStarterInventory(
+  classId?: string | null,
+): InventoryInstance[] {
+  return starterInventoryIdsForClass(classId).map((itemId) => ({
     instanceId: generateInstanceId(),
     itemId,
   }));
@@ -302,6 +398,19 @@ export function itemsForClass(classId: string | null): Item[] {
   return allCatalogItems().filter(
     (i) => !i.classes?.length || i.classes.includes(classId),
   );
+}
+
+/**
+ * True if this hero may equip the item (universal items, or class list includes hero class).
+ * No class on hero → cannot equip class-restricted gear.
+ */
+export function canUserEquipItem(
+  item: Item,
+  userClassId: string | null,
+): boolean {
+  if (!item.classes?.length) return true;
+  if (!userClassId) return false;
+  return item.classes.includes(userClassId);
 }
 
 /** Group catalog items by equipment slot. */

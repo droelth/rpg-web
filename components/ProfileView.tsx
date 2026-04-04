@@ -15,7 +15,11 @@ import type {
 } from "@/types/item";
 import { SLOT_ORDER } from "@/types/item";
 import { getInventoryPortraitPath } from "@/lib/classPortrait";
-import { getOrCreateUser, type UserDocument } from "@/lib/getOrCreateUser";
+import {
+  fetchUserPublicProfile,
+  getOrCreateUser,
+  type UserDocument,
+} from "@/lib/getOrCreateUser";
 import { HERO_CLASSES } from "@/lib/heroClasses";
 import {
   findInventoryInstance,
@@ -71,7 +75,12 @@ const REMOVE_CHARACTER_CONFIRM =
   "This will permanently delete your entire save from Firebase (progress, items, gold, rank, everything). " +
   "This cannot be undone.";
 
-export function ProfileView() {
+export type ProfileViewProps = {
+  /** When set, show this user's public profile (read-only). */
+  targetUserId?: string | null;
+};
+
+export function ProfileView({ targetUserId }: ProfileViewProps) {
   const router = useRouter();
   const { user, loading: authLoading, authError } = useAuth();
   const [loading, setLoading] = useState(true);
@@ -80,7 +89,10 @@ export function ProfileView() {
   const [removing, setRemoving] = useState(false);
   const [userDoc, setUserDoc] = useState<UserDocument | null>(null);
 
-  const refresh = useCallback(async (uid: string) => {
+  const targetIdTrimmed = targetUserId?.trim() ?? "";
+  const viewingOther = Boolean(targetIdTrimmed) && targetIdTrimmed !== user?.uid;
+
+  const refreshSelf = useCallback(async (uid: string) => {
     const d = await getOrCreateUser(uid);
     setUserDoc(d);
   }, []);
@@ -91,10 +103,22 @@ export function ProfileView() {
       setLoading(false);
       return;
     }
+
+    const otherId = targetIdTrimmed;
+    setLoading(true);
+    setErr(null);
     let cancelled = false;
     (async () => {
       try {
-        await refresh(user.uid);
+        if (otherId && otherId !== user.uid) {
+          const d = await fetchUserPublicProfile(otherId);
+          if (!cancelled) {
+            if (!d) setErr("Player not found.");
+            setUserDoc(d);
+          }
+        } else {
+          await refreshSelf(user.uid);
+        }
       } catch (e) {
         console.error(e);
         if (!cancelled) setErr("Failed to load profile.");
@@ -105,7 +129,13 @@ export function ProfileView() {
     return () => {
       cancelled = true;
     };
-  }, [authLoading, authError, user, refresh]);
+  }, [
+    authLoading,
+    authError,
+    user,
+    targetIdTrimmed,
+    refreshSelf,
+  ]);
 
   async function handleRemoveCharacter() {
     if (!user || removing) return;
@@ -136,6 +166,7 @@ export function ProfileView() {
       stats: userDoc.stats,
       equipped: userDoc.equipped,
       inventory: userDoc.inventory,
+      heroClass: userDoc.class,
     });
   }, [userDoc]);
 
@@ -183,8 +214,11 @@ export function ProfileView() {
     return (
       <div className="p-6 text-center text-red-400">
         {err ?? "Could not load profile."}
-        <Link href="/" className="mt-4 block text-amber-400 underline">
-          Home
+        <Link
+          href={viewingOther ? "/leaderboard" : "/"}
+          className="mt-4 block text-amber-400 underline"
+        >
+          {viewingOther ? "Back to leaderboard" : "Home"}
         </Link>
       </div>
     );
@@ -194,13 +228,24 @@ export function ProfileView() {
     <div className="min-h-dvh bg-zinc-950 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-violet-950/35 via-zinc-950 to-black text-zinc-100">
       <div className="mx-auto flex max-w-md flex-col gap-6 px-4 py-6 pb-12">
         <header className="flex items-center justify-between">
-          <Link
-            href="/"
-            className="text-sm text-violet-300/90 hover:text-violet-200"
-          >
-            ← Main menu
-          </Link>
-          <h1 className="text-lg font-semibold tracking-tight">Profile</h1>
+          {viewingOther ? (
+            <Link
+              href="/leaderboard"
+              className="text-sm text-violet-300/90 hover:text-violet-200"
+            >
+              ← Leaderboard
+            </Link>
+          ) : (
+            <Link
+              href="/"
+              className="text-sm text-violet-300/90 hover:text-violet-200"
+            >
+              ← Main menu
+            </Link>
+          )}
+          <h1 className="text-lg font-semibold tracking-tight">
+            {viewingOther ? "Adventurer" : "Profile"}
+          </h1>
           <span className="w-20" aria-hidden />
         </header>
 
@@ -231,6 +276,12 @@ export function ProfileView() {
           <p className="mt-1 text-sm font-medium capitalize text-violet-300/85">
             {classDisplayName(userDoc.class)}
           </p>
+          {viewingOther ? (
+            <p className="mt-3 text-xs text-zinc-500">
+              Rank {userDoc.rankPoints.toLocaleString()} RP · {userDoc.wins}W /{" "}
+              {userDoc.losses}L
+            </p>
+          ) : null}
         </section>
 
         {/* Level & XP */}
@@ -329,23 +380,25 @@ export function ProfileView() {
           </ul>
         </section>
 
-        <section className="rounded-2xl border border-red-500/25 bg-red-950/20 p-5 backdrop-blur-md">
-          <p className="text-center text-[10px] font-semibold uppercase tracking-widest text-red-400/90">
-            Danger zone
-          </p>
-          <p className="mt-2 text-center text-xs text-zinc-500">
-            Permanently delete your character document in Firebase. You will be
-            signed out and can start fresh.
-          </p>
-          <button
-            type="button"
-            disabled={removing}
-            onClick={handleRemoveCharacter}
-            className="mt-4 w-full rounded-xl border border-red-500/50 bg-red-950/50 py-3 text-sm font-semibold text-red-200 transition hover:bg-red-900/40 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {removing ? "Removing…" : "Remove character"}
-          </button>
-        </section>
+        {!viewingOther ? (
+          <section className="rounded-2xl border border-red-500/25 bg-red-950/20 p-5 backdrop-blur-md">
+            <p className="text-center text-[10px] font-semibold uppercase tracking-widest text-red-400/90">
+              Danger zone
+            </p>
+            <p className="mt-2 text-center text-xs text-zinc-500">
+              Permanently delete your character document in Firebase. You will be
+              signed out and can start fresh.
+            </p>
+            <button
+              type="button"
+              disabled={removing}
+              onClick={handleRemoveCharacter}
+              className="mt-4 w-full rounded-xl border border-red-500/50 bg-red-950/50 py-3 text-sm font-semibold text-red-200 transition hover:bg-red-900/40 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {removing ? "Removing…" : "Remove character"}
+            </button>
+          </section>
+        ) : null}
       </div>
     </div>
   );

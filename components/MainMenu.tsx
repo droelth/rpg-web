@@ -31,6 +31,20 @@ function PvpIcon() {
   );
 }
 
+function LeaderboardIcon() {
+  return (
+    <svg className="h-6 w-6" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M8 21h8M12 17v4M6 3h4v6H6V3zm8 0h4v4h-4V3zM6 9h12M9 21h6"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function DungeonIcon() {
   return (
     <svg className="h-6 w-6" viewBox="0 0 24 24" fill="none" aria-hidden>
@@ -182,6 +196,14 @@ export function MainMenu({
             icon={<DungeonIcon />}
             href="/dungeon"
           />
+          <div className="col-span-2">
+            <ActionButton
+              label="Leaderboard"
+              theme="leaderboard"
+              icon={<LeaderboardIcon />}
+              onClick={() => router.push("/leaderboard")}
+            />
+          </div>
           <ActionButton
             label="Shop"
             theme="shop"

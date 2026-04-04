@@ -7,6 +7,8 @@ import {
   INITIAL_USER_ENERGY,
   INITIAL_USER_GOLD,
 } from "@/lib/getOrCreateUser";
+import { createStarterInventory, inventoryToFirestore } from "@/lib/items";
+import { EMPTY_EQUIPPED } from "@/types/item";
 import { persistEffectiveCombatStats } from "@/lib/inventoryUtils";
 import { xpToNextForCurrentLevel } from "@/lib/levelSystem";
 import { DEFAULT_HERO_ID, HERO_CLASSES } from "@/lib/heroClasses";
@@ -50,6 +52,10 @@ export function TestOnboarding({ uid, onSaved }: TestOnboardingProps) {
         xpToNext: xpToNextForCurrentLevel(1),
         gold: INITIAL_USER_GOLD,
         energy: INITIAL_USER_ENERGY,
+        inventory: inventoryToFirestore(
+          createStarterInventory(selectedClass.id),
+        ),
+        equipped: EMPTY_EQUIPPED,
       });
       await persistEffectiveCombatStats(uid);
       onSaved();

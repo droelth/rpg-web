@@ -27,7 +27,7 @@ export class ShopOfferError extends Error {
   }
 }
 
-/** Paid refresh: −50 gold, new offers, new lastRefresh. */
+/** Paid manual refresh: deducts MANUAL_REFRESH_COST gold, rolls new offers + lastRefresh. */
 export async function transactionManualRefreshShop(
   uid: string,
   classId: string | null,

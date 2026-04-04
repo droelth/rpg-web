@@ -6,6 +6,9 @@ import { getDb } from "./firebase";
 export const XP_ON_WIN = 50;
 export const XP_ON_LOSS = 10;
 
+/** Character level cannot exceed this (XP still applies but no further level-ups). */
+export const MAX_LEVEL = 10;
+
 /** Max level-ups processed in one applyLevelUp call (safety). */
 const MAX_LEVEL_UPS = 500;
 
@@ -51,13 +54,41 @@ function applyClassLevelBonus(stats: CombatTotals, classId: string | null): void
  * Process all pending level-ups: subtract thresholds, bump stats (permanent in-memory).
  * XP is clamped to >= 0. Does not write to Firebase.
  */
+function clampAtMaxLevel(
+  level: number,
+  xp: number,
+  stats: CombatTotals,
+  classId: string | null,
+): UserLevelFields {
+  const cappedLevel = MAX_LEVEL;
+  const capXpToNext = xpToNextForCurrentLevel(cappedLevel);
+  const cappedXp = Math.min(Math.max(0, xp), capXpToNext);
+  return {
+    level: cappedLevel,
+    xp: cappedXp,
+    xpToNext: capXpToNext,
+    stats: { ...stats },
+    class: classId,
+  };
+}
+
 export function applyLevelUp(user: UserLevelFields): UserLevelFields {
   let { level, xp, xpToNext, stats, class: classId } = user;
   xp = Math.max(0, xp);
+  level = Math.min(Math.max(1, Math.floor(level)), MAX_LEVEL);
+
+  if (level >= MAX_LEVEL) {
+    return clampAtMaxLevel(level, xp, stats, classId);
+  }
+
   let nextStats: CombatTotals = { ...stats };
   let guard = 0;
 
-  while (xp >= xpToNext && guard < MAX_LEVEL_UPS) {
+  while (
+    xp >= xpToNext &&
+    level < MAX_LEVEL &&
+    guard < MAX_LEVEL_UPS
+  ) {
     guard += 1;
     xp -= xpToNext;
     level += 1;
@@ -75,6 +106,10 @@ export function applyLevelUp(user: UserLevelFields): UserLevelFields {
     console.error("applyLevelUp: max iterations reached");
   }
 
+  if (level >= MAX_LEVEL) {
+    return clampAtMaxLevel(level, xp, nextStats, classId);
+  }
+
   return {
     level,
     xp,
@@ -89,11 +124,12 @@ export function parseUserLevelFields(data: Record<string, unknown>): UserLevelFi
   const levelRaw = data.level;
   const xpRaw = data.xp;
   const xpToNextRaw = data.xpToNext;
-  const level =
+  const levelUncapped =
     typeof levelRaw === "number" && Number.isFinite(levelRaw) && levelRaw >= 1
       ? Math.floor(levelRaw)
       : 1;
-  const xp =
+  const level = Math.min(levelUncapped, MAX_LEVEL);
+  let xp =
     typeof xpRaw === "number" && Number.isFinite(xpRaw) && xpRaw >= 0
       ? Math.floor(xpRaw)
       : 0;
@@ -102,6 +138,10 @@ export function parseUserLevelFields(data: Record<string, unknown>): UserLevelFi
     xpToNext = Math.floor(xpToNextRaw);
   } else {
     xpToNext = xpToNextForCurrentLevel(level);
+  }
+  if (level >= MAX_LEVEL) {
+    xpToNext = xpToNextForCurrentLevel(MAX_LEVEL);
+    xp = Math.min(xp, xpToNext);
   }
   return {
     level,

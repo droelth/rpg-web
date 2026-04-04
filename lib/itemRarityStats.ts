@@ -21,13 +21,17 @@ export function rarityStatMultiplier(rarity: ItemRarity): number {
 }
 
 /**
- * Combat/UI stats for one inventory row: catalog `item.stats` scaled by instance (or catalog) rarity.
+ * Combat/UI stats for one inventory row: explicit `statsByRarity` tier, else `stats` × rarity multiplier.
  */
 export function effectiveItemStatsForInstance(
   item: Item,
   instance: Pick<InventoryInstance, "rarity"> | undefined | null,
 ): ItemStats {
   const rarity = effectiveRarityForInstance(item, instance);
+  const byRarity = item.statsByRarity?.[rarity];
+  if (byRarity && Object.keys(byRarity).length > 0) {
+    return { ...byRarity };
+  }
   const m = RARITY_STAT_MULTIPLIER[rarity];
   const s = item.stats;
   const out: ItemStats = {};

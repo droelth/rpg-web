@@ -9,7 +9,7 @@ import {
 } from "@/lib/items";
 
 export const REFRESH_INTERVAL_MS = 12 * 60 * 60 * 1000;
-export const MANUAL_REFRESH_COST = 50;
+export const MANUAL_REFRESH_COST = 110;
 
 const RARITY_ORDER: ItemRarity[] = [
   "common",
@@ -23,11 +23,11 @@ const RARITY_ORDER: ItemRarity[] = [
 const RARITY_THRESHOLDS = [0.5, 0.75, 0.9, 0.98, 1.0];
 
 const PRICE_BY_RARITY: Record<ItemRarity, number> = {
-  common: 50,
-  uncommon: 100,
-  rare: 200,
-  epic: 400,
-  legendary: 800,
+  common: 100,
+  uncommon: 200,
+  rare: 420,
+  epic: 850,
+  legendary: 1700,
 };
 
 export type ShopOffer = {

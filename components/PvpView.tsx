@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { CombatantPortrait } from "@/components/CombatantPortrait";
 import {
   useCallback,
   useEffect,
@@ -14,6 +15,7 @@ import {
   type Fighter,
   type Stats,
 } from "@/lib/combat";
+import { getInventoryPortraitPath } from "@/lib/classPortrait";
 import { MAX_ENERGY } from "@/lib/energySystem";
 import { getOrCreateUser, type UserDocument } from "@/lib/getOrCreateUser";
 import { ensureInventoryDefaults } from "@/lib/inventoryUtils";
@@ -29,8 +31,36 @@ import {
   transactionConsumePvpEnergy,
 } from "@/lib/pvpFirestore";
 import { useAuth } from "@/hooks/useAuth";
+import type { CombatTotals } from "@/lib/inventoryUtils";
 
 type Phase = "hub" | "preview" | "battle" | "result";
+
+function PvpCombatStatsDl({
+  stats,
+  currentHp,
+  hpAccentClass,
+}: {
+  stats: CombatTotals;
+  currentHp?: number;
+  hpAccentClass: string;
+}) {
+  const hpLine =
+    currentHp != null ? `${currentHp} / ${stats.hp}` : String(stats.hp);
+  return (
+    <dl className="mt-2 grid grid-cols-2 gap-x-2 gap-y-1 text-xs text-zinc-300">
+      <dt className="text-zinc-500">HP</dt>
+      <dd className={`text-right font-mono tabular-nums ${hpAccentClass}`}>
+        {hpLine}
+      </dd>
+      <dt className="text-zinc-500">ATK</dt>
+      <dd className="text-right font-mono tabular-nums">{stats.atk}</dd>
+      <dt className="text-zinc-500">DEF</dt>
+      <dd className="text-right font-mono tabular-nums">{stats.def}</dd>
+      <dt className="text-zinc-500">CRIT</dt>
+      <dd className="text-right font-mono tabular-nums">{stats.crit}</dd>
+    </dl>
+  );
+}
 
 function VersusNames({ left, right }: { left: string; right: string }) {
   return (
@@ -368,39 +398,53 @@ export function PvpView() {
 
         {phase === "preview" && opponent ? (
           <div className="space-y-6">
+            <div className="grid grid-cols-2 gap-3">
+              <CombatantPortrait
+                src={getInventoryPortraitPath(userDoc.class)}
+                alt={userDoc.username?.trim() || "You"}
+              />
+              <CombatantPortrait
+                src={getInventoryPortraitPath(opponent.class)}
+                alt={opponent.fighter.name}
+              />
+            </div>
             <VersusNames
               left={userDoc.username?.trim() || "You"}
               right={opponent.fighter.name}
             />
-            <div className="rounded-2xl border border-white/10 bg-zinc-900/60 p-4">
-              <p className="text-xs font-semibold uppercase tracking-wider text-zinc-500">
-                Opponent
-              </p>
-              <p className="mt-1 text-xl font-bold text-zinc-50">
-                {opponent.fighter.name}
-              </p>
-              <p className="text-sm text-zinc-400">
-                Level {opponent.level}
-                {opponent.class ? ` · ${opponent.class}` : ""}
-              </p>
-              <dl className="mt-3 grid grid-cols-2 gap-2 text-xs text-zinc-300">
-                <dt className="text-zinc-500">HP</dt>
-                <dd className="text-right font-mono">
-                  {opponent.effectiveStats.hp}
-                </dd>
-                <dt className="text-zinc-500">ATK</dt>
-                <dd className="text-right font-mono">
-                  {opponent.effectiveStats.atk}
-                </dd>
-                <dt className="text-zinc-500">DEF</dt>
-                <dd className="text-right font-mono">
-                  {opponent.effectiveStats.def}
-                </dd>
-                <dt className="text-zinc-500">CRIT</dt>
-                <dd className="text-right font-mono">
-                  {opponent.effectiveStats.crit}
-                </dd>
-              </dl>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="rounded-2xl border border-sky-500/20 bg-zinc-900/60 p-3">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-sky-400/80">
+                  You
+                </p>
+                <p className="mt-1 truncate text-sm font-bold text-zinc-50">
+                  {userDoc.username?.trim() || "You"}
+                </p>
+                <p className="text-xs text-zinc-400">
+                  Lv {userDoc.level}
+                  {userDoc.class ? ` · ${userDoc.class}` : ""}
+                </p>
+                <PvpCombatStatsDl
+                  stats={userDoc.effectiveStats}
+                  hpAccentClass="text-sky-300"
+                />
+              </div>
+              <div className="rounded-2xl border border-rose-500/20 bg-zinc-900/60 p-3">
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-rose-400/80">
+                  Opponent
+                </p>
+                <p className="mt-1 truncate text-sm font-bold text-zinc-50">
+                  {opponent.fighter.name}
+                </p>
+                <p className="text-xs text-zinc-400">
+                  Lv {opponent.level}
+                  {opponent.class ? ` · ${opponent.class}` : ""}
+                </p>
+                <PvpCombatStatsDl
+                  stats={opponent.effectiveStats}
+                  hpAccentClass="text-rose-300"
+                />
+              </div>
             </div>
             <button
               type="button"
@@ -424,19 +468,35 @@ export function PvpView() {
           <div className="space-y-4">
             <VersusNames left={player.name} right={enemy.name} />
             <div className="grid grid-cols-2 gap-3">
-              <div className="rounded-xl border border-white/10 bg-black/30 p-3">
-                <p className="text-[10px] uppercase text-zinc-500">You</p>
-                <p className="font-semibold">{player.name}</p>
-                <p className="mt-1 font-mono text-sm text-emerald-300">
-                  {player.currentHp} / {player.stats.hp} HP
-                </p>
+              <div className="flex flex-col gap-2">
+                <CombatantPortrait
+                  src={getInventoryPortraitPath(userDoc.class)}
+                  alt={player.name}
+                />
+                <div className="rounded-xl border border-emerald-500/20 bg-black/30 p-3">
+                  <p className="text-[10px] uppercase text-zinc-500">You</p>
+                  <p className="truncate font-semibold">{player.name}</p>
+                  <PvpCombatStatsDl
+                    stats={player.stats}
+                    currentHp={player.currentHp}
+                    hpAccentClass="text-emerald-300"
+                  />
+                </div>
               </div>
-              <div className="rounded-xl border border-white/10 bg-black/30 p-3">
-                <p className="text-[10px] uppercase text-zinc-500">Enemy</p>
-                <p className="font-semibold">{enemy.name}</p>
-                <p className="mt-1 font-mono text-sm text-rose-300">
-                  {enemy.currentHp} / {enemy.stats.hp} HP
-                </p>
+              <div className="flex flex-col gap-2">
+                <CombatantPortrait
+                  src={getInventoryPortraitPath(opponent?.class)}
+                  alt={enemy.name}
+                />
+                <div className="rounded-xl border border-rose-500/20 bg-black/30 p-3">
+                  <p className="text-[10px] uppercase text-zinc-500">Opponent</p>
+                  <p className="truncate font-semibold">{enemy.name}</p>
+                  <PvpCombatStatsDl
+                    stats={enemy.stats}
+                    currentHp={enemy.currentHp}
+                    hpAccentClass="text-rose-300"
+                  />
+                </div>
               </div>
             </div>
             <ul
@@ -452,6 +512,18 @@ export function PvpView() {
 
         {phase === "result" && rewards ? (
           <div className="space-y-6 text-center">
+            {opponent ? (
+              <div className="mx-auto grid max-w-md grid-cols-2 gap-3">
+                <CombatantPortrait
+                  src={getInventoryPortraitPath(userDoc.class)}
+                  alt={userDoc.username?.trim() || "You"}
+                />
+                <CombatantPortrait
+                  src={getInventoryPortraitPath(opponent.class)}
+                  alt={opponent.fighter.name}
+                />
+              </div>
+            ) : null}
             {player && enemy ? (
               <VersusNames left={player.name} right={enemy.name} />
             ) : opponent ? (
@@ -459,6 +531,30 @@ export function PvpView() {
                 left={userDoc.username?.trim() || "You"}
                 right={opponent.fighter.name}
               />
+            ) : null}
+            {player && enemy ? (
+              <div className="grid grid-cols-2 gap-3 text-left">
+                <div className="rounded-xl border border-emerald-500/20 bg-zinc-900/50 p-3">
+                  <p className="text-[10px] font-semibold uppercase text-emerald-400/85">
+                    Final · You
+                  </p>
+                  <PvpCombatStatsDl
+                    stats={player.stats}
+                    currentHp={player.currentHp}
+                    hpAccentClass="text-emerald-300"
+                  />
+                </div>
+                <div className="rounded-xl border border-rose-500/20 bg-zinc-900/50 p-3">
+                  <p className="text-[10px] font-semibold uppercase text-rose-400/85">
+                    Final · Opponent
+                  </p>
+                  <PvpCombatStatsDl
+                    stats={enemy.stats}
+                    currentHp={enemy.currentHp}
+                    hpAccentClass="text-rose-300"
+                  />
+                </div>
+              </div>
             ) : null}
             <h2 className="text-2xl font-bold text-zinc-50">
               {rewards.won ? "Victory" : "Defeat"}

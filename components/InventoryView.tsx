@@ -11,6 +11,7 @@ import { getDb } from "@/lib/firebase";
 import { getOrCreateUser, type UserDocument } from "@/lib/getOrCreateUser";
 import type { CombatTotals } from "@/lib/inventoryUtils";
 import {
+  EquipClassMismatchError,
   ensureInventoryDefaults,
   equipItem,
   findInventoryInstance,
@@ -21,7 +22,11 @@ import {
 } from "@/lib/inventoryUtils";
 import { describeItemStats } from "@/lib/itemDisplay";
 import { rarityLabelClass } from "@/lib/itemRarityStyles";
-import { resolveInventoryEntries, resolveItem } from "@/lib/items";
+import {
+  canUserEquipItem,
+  resolveInventoryEntries,
+  resolveItem,
+} from "@/lib/items";
 import { EmptyEquipSlot, ItemCard } from "@/components/ItemCard";
 import { useAuth } from "@/hooks/useAuth";
 
@@ -186,6 +191,7 @@ export function InventoryView() {
       userDoc.inventory,
       selectedRow.instance.instanceId,
       selected,
+      userDoc.class,
     );
   }, [userDoc, base, selected, selectedRow]);
 
@@ -196,6 +202,7 @@ export function InventoryView() {
             stats: userDoc.stats,
             equipped: userDoc.equipped,
             inventory: userDoc.inventory,
+            heroClass: userDoc.class,
           })
         : null,
     [userDoc],
@@ -219,6 +226,9 @@ export function InventoryView() {
   const isSelectedEquipped =
     selectedRow != null &&
     equippedInstanceIdForSelectedSlot === selectedRow.instance.instanceId;
+
+  const selectedUsableByClass =
+    selected != null && canUserEquipItem(selected, userDoc?.class ?? null);
 
   const shouldOfferSwap =
     equippedInstanceIdForSelectedSlot != null &&
@@ -250,7 +260,11 @@ export function InventoryView() {
       await refresh(user.uid);
     } catch (e) {
       console.error(e);
-      setErr(shouldOfferSwap ? "Could not swap item." : "Could not equip item.");
+      if (e instanceof EquipClassMismatchError) {
+        setErr(e.message);
+      } else {
+        setErr(shouldOfferSwap ? "Could not swap item." : "Could not equip item.");
+      }
     } finally {
       setSaving(false);
     }
@@ -476,11 +490,17 @@ export function InventoryView() {
                     )}
                   </ul>
 
-                  {preview ? (
+                  {preview && selectedUsableByClass ? (
                     <StatEquipPreview
                       current={preview.current}
                       after={preview.after}
                     />
+                  ) : null}
+
+                  {!selectedUsableByClass ? (
+                    <p className="mt-4 text-sm text-amber-400/90">
+                      This item is for another class. You cannot equip it.
+                    </p>
                   ) : null}
 
                   {shouldOfferSwap ? (
@@ -497,7 +517,7 @@ export function InventoryView() {
                     {!isSelectedEquipped ? (
                       <button
                         type="button"
-                        disabled={saving}
+                        disabled={saving || !selectedUsableByClass}
                         onClick={handleEquip}
                         className="rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-violet-900/40 transition hover:bg-violet-500 disabled:opacity-40"
                       >

@@ -3,12 +3,13 @@ import type { EquippedState, InventoryInstance, Item, ItemStats, ItemType } from
 import { EMPTY_EQUIPPED, SLOT_ORDER } from "@/types/item";
 import {
   canonicalItemId,
+  canUserEquipItem,
+  createStarterInventory,
   generateInstanceId,
   inventoryToFirestore,
   isLegacyInventoryInstanceId,
   parseInventory,
   resolveItem,
-  createStarterInventory,
 } from "@/lib/items";
 import { effectiveItemStatsForInstance } from "@/lib/itemRarityStats";
 import { getDb } from "./firebase";
@@ -74,6 +75,13 @@ export function findInventoryInstance(
 /**
  * Equip by instance: sets `equipped[item.type] = instanceId` (replaces whatever was in that slot).
  */
+export class EquipClassMismatchError extends Error {
+  constructor() {
+    super("This item is not for your class.");
+    this.name = "EquipClassMismatchError";
+  }
+}
+
 export async function equipItem(uid: string, instanceId: string): Promise<void> {
   const ref = doc(getDb(), "users", uid);
   const snap = await getDoc(ref);
@@ -84,6 +92,13 @@ export async function equipItem(uid: string, instanceId: string): Promise<void> 
   if (!inst) throw new Error("Item instance not in inventory");
   const item = resolveItem(inst.itemId);
   if (!item) throw new Error("Unknown item catalog entry");
+  const heroClass =
+    typeof data.class === "string" && data.class.trim().length > 0
+      ? data.class.trim()
+      : null;
+  if (!canUserEquipItem(item, heroClass)) {
+    throw new EquipClassMismatchError();
+  }
   const equipped = sanitizeEquippedToInventory(
     parseEquipped(data.equipped),
     inventory,
@@ -125,6 +140,7 @@ export function calculateCombatTotalsWithEquippedInventory(
   base: CombatTotals,
   equipped: EquippedState,
   inventory: InventoryInstance[],
+  heroClass: string | null = null,
 ): CombatTotals {
   const sanitized = sanitizeEquippedToInventory(equipped, inventory);
   const byId = new Map(inventory.map((i) => [i.instanceId, i]));
@@ -135,10 +151,34 @@ export function calculateCombatTotalsWithEquippedInventory(
     const inst = byId.get(iid);
     if (!inst) continue;
     const it = resolveItem(inst.itemId);
-    if (!it) continue;
+    if (!it || !canUserEquipItem(it, heroClass)) continue;
     acc = addItemStats(acc, effectiveItemStatsForInstance(it, inst));
   }
   return acc;
+}
+
+/** Clear equipped slots where the item is class-restricted and not for this hero. */
+export function sanitizeEquippedToHeroClass(
+  equipped: EquippedState,
+  inventory: InventoryInstance[],
+  heroClass: string | null,
+): EquippedState {
+  const byId = new Map(inventory.map((i) => [i.instanceId, i]));
+  const next: EquippedState = { ...equipped };
+  for (const slot of SLOT_ORDER) {
+    const iid = next[slot];
+    if (!iid) continue;
+    const inst = byId.get(iid);
+    if (!inst) {
+      next[slot] = null;
+      continue;
+    }
+    const it = resolveItem(inst.itemId);
+    if (!it || !canUserEquipItem(it, heroClass)) {
+      next[slot] = null;
+    }
+  }
+  return sanitizeEquippedToInventory(next, inventory);
 }
 
 /** Shape needed to derive effective combat stats (base + equipped catalog items). */
@@ -146,16 +186,20 @@ export type UserCombatSource = {
   stats: unknown;
   equipped: EquippedState;
   inventory: InventoryInstance[];
+  /** Hero class id; class-restricted items for other classes add no stats. */
+  heroClass?: string | null;
 };
 
 /** Total stats = parseBaseStats + equipped items (catalog stats × instance rarity). */
 export function getEffectiveCombatTotals(user: UserCombatSource): CombatTotals {
   const base = parseBaseStats(user.stats);
+  const heroClass = user.heroClass ?? null;
   const sanitized = sanitizeEquippedToInventory(user.equipped, user.inventory);
   return calculateCombatTotalsWithEquippedInventory(
     base,
     sanitized,
     user.inventory,
+    heroClass,
   );
 }
 
@@ -181,20 +225,35 @@ export async function persistEffectiveCombatStats(uid: string): Promise<CombatTo
       stats: null,
       equipped: { ...EMPTY_EQUIPPED },
       inventory: [],
+      heroClass: null,
     });
   }
   const data = snap.data() as Record<string, unknown>;
   const inventory = parseInventory(data.inventory);
-  const equipped = sanitizeEquippedToInventory(
+  let equipped = sanitizeEquippedToInventory(
     parseEquipped(data.equipped),
     inventory,
   );
-  const totals = getEffectiveCombatTotals({
-    stats: data.stats,
+  const heroClass =
+    typeof data.class === "string" && data.class.trim().length > 0
+      ? data.class.trim()
+      : null;
+  const classSafe = sanitizeEquippedToHeroClass(
     equipped,
     inventory,
+    heroClass,
+  );
+  const totals = getEffectiveCombatTotals({
+    stats: data.stats,
+    equipped: classSafe,
+    inventory,
+    heroClass,
   });
-  await updateDoc(ref, { effectiveStats: totals });
+  const patches: Record<string, unknown> = { effectiveStats: totals };
+  if (JSON.stringify(classSafe) !== JSON.stringify(equipped)) {
+    patches.equipped = classSafe;
+  }
+  await updateDoc(ref, patches);
   return totals;
 }
 
@@ -205,12 +264,14 @@ export function simulateEquip(
   inventory: InventoryInstance[],
   instanceId: string,
   newItem: Item,
+  heroClass: string | null = null,
 ): { current: CombatTotals; after: CombatTotals } {
   const sanitized = sanitizeEquippedToInventory(equipped, inventory);
   const current = calculateCombatTotalsWithEquippedInventory(
     base,
     sanitized,
     inventory,
+    heroClass,
   );
 
   const nextEquipped: EquippedState = {
@@ -221,6 +282,7 @@ export function simulateEquip(
     base,
     nextEquipped,
     inventory,
+    heroClass,
   );
 
   return { current, after };
@@ -342,7 +404,8 @@ export async function ensureInventoryDefaults(uid: string): Promise<void> {
   let writeEq = false;
 
   if (inventory.length === 0) {
-    inventory = createStarterInventory();
+    const classId = typeof d.class === "string" ? d.class : null;
+    inventory = createStarterInventory(classId);
     equipped = { ...EMPTY_EQUIPPED };
     writeInv = true;
     writeEq = true;

@@ -13,7 +13,12 @@ export type Item = {
   id: string;
   name: string;
   type: ItemType;
+  /** Default / fallback stats (usually matches `common` tier). */
   stats: ItemStats;
+  /**
+   * When set, combat/UI uses the row for the instance (or catalog) rarity instead of scaling `stats`.
+   */
+  statsByRarity?: Record<ItemRarity, ItemStats>;
   /** Visual tier; stored only in the item catalog, not in Firebase. */
   rarity: ItemRarity;
   /** If set, item appears in that class’s shop pool only. Omit or empty = any class fallback. */

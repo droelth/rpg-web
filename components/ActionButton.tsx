@@ -6,6 +6,7 @@ import type { ReactNode } from "react";
 export type ActionTheme =
   | "pvp"
   | "dungeon"
+  | "leaderboard"
   | "shop"
   | "forge"
   | "inventory"
@@ -27,6 +28,12 @@ const THEME_STYLES: Record<
       "from-zinc-600 via-zinc-800 to-zinc-950 hover:from-zinc-500 hover:via-zinc-700 hover:to-zinc-900",
     glow: "hover:shadow-[0_0_28px_rgba(161,161,170,0.25)]",
     border: "border-zinc-500/30",
+  },
+  leaderboard: {
+    gradient:
+      "from-amber-700 via-yellow-900 to-amber-950 hover:from-amber-600 hover:via-yellow-800 hover:to-amber-900",
+    glow: "hover:shadow-[0_0_28px_rgba(251,191,36,0.35)]",
+    border: "border-amber-400/30",
   },
   shop: {
     gradient:

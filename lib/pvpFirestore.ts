@@ -16,6 +16,17 @@ export class PvpEnergyError extends Error {
   }
 }
 
+function readNonNegIntField(
+  data: Record<string, unknown>,
+  key: "wins" | "losses",
+): number {
+  const v = data[key];
+  if (typeof v === "number" && Number.isFinite(v)) {
+    return Math.max(0, Math.floor(v));
+  }
+  return 0;
+}
+
 /**
  * Regen energy from `lastEnergyUpdate`, then spend 1 for a PvP match. Atomic.
  */
@@ -86,6 +97,11 @@ export async function persistPvpBattleResult(
         : 0;
     const nextRank = Math.max(0, prevRank + input.rankDelta);
 
+    const prevWins = readNonNegIntField(data, "wins");
+    const prevLosses = readNonNegIntField(data, "losses");
+    const nextWins = input.won ? prevWins + 1 : prevWins;
+    const nextLosses = input.won ? prevLosses : prevLosses + 1;
+
     transaction.update(ref, {
       level: finalState.level,
       xp: finalState.xp,
@@ -93,6 +109,8 @@ export async function persistPvpBattleResult(
       stats: finalState.stats,
       gold: nextGold,
       rankPoints: nextRank,
+      wins: nextWins,
+      losses: nextLosses,
     });
   });
 

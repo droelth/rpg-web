@@ -13,7 +13,7 @@ const MOB_TYPES: readonly MobType[] = [
  * Global tuning: all dungeon enemies are multiplied by this (lower = easier).
  * Applied after role profile + stage + variation.
  */
-const DUNGEON_ENEMY_POWER = 0.72;
+const DUNGEON_ENEMY_POWER = 0.86;
 
 /** Per-role stat weights vs player snapshot (before stage multiplier & variation). */
 const MOB_PROFILE: Record<
@@ -32,6 +32,21 @@ export const MOB_DISPLAY_NAME: Record<MobType, string> = {
   caster: "Abyss Caster",
   guardian: "Stone Guardian",
 };
+
+const MOB_PORTRAIT: Record<MobType, string> = {
+  bruiser: "/images/mobs/bruiser.png",
+  assassin: "/images/mobs/assassin.png",
+  caster: "/images/mobs/caster.png",
+  guardian: "/images/mobs/guardian.png",
+};
+
+/** Public path under `public/images/mobs/` for dungeon mob art. */
+export function getMobPortraitPath(
+  mobType: MobType | null | undefined,
+): string {
+  const key = mobType ?? "bruiser";
+  return MOB_PORTRAIT[key];
+}
 
 /** Uniform multiplier in [0.9, 1.1] (~±10%). */
 export function rollStatVariation(): number {

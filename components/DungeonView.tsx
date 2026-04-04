@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { CombatantPortrait } from "@/components/CombatantPortrait";
 import {
   decideFirstTurn,
   runCombatStep,
@@ -13,6 +14,7 @@ import { DUNGEONS } from "@/lib/dungeons";
 import { persistDungeonClaim } from "@/lib/dungeonFirestore";
 import type { DungeonDrop } from "@/lib/dungeonRewards";
 import { rollDungeonDrop } from "@/lib/dungeonRewards";
+import { getInventoryPortraitPath } from "@/lib/classPortrait";
 import { getOrCreateUser, type UserDocument } from "@/lib/getOrCreateUser";
 import { INITIAL_USER_ENERGY } from "@/lib/getOrCreateUser";
 import { ensureInventoryDefaults } from "@/lib/inventoryUtils";
@@ -20,8 +22,10 @@ import type { CombatTotals } from "@/lib/inventoryUtils";
 import { generateInstanceId } from "@/lib/items";
 import {
   buildMobFighter,
+  getMobPortraitPath,
   MOB_DISPLAY_NAME,
   randomMobType,
+  type MobType,
 } from "@/lib/mobs";
 import { rarityLabelClass } from "@/lib/itemRarityStyles";
 import { useAuth } from "@/hooks/useAuth";
@@ -65,6 +69,7 @@ export function DungeonView() {
     null,
   );
   const [claimError, setClaimError] = useState<string | null>(null);
+  const [activeMobType, setActiveMobType] = useState<MobType | null>(null);
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const logScrollRef = useRef<HTMLUListElement | null>(null);
@@ -124,12 +129,15 @@ export function DungeonView() {
     dungeon: DungeonDefinition,
     stage: number,
     snapshot: Stats,
-  ): Fighter {
+  ): { fighter: Fighter; mobType: MobType } {
     const mult = dungeon.stageMultipliers[stage] ?? 1;
     const mob = randomMobType();
     const label = MOB_DISPLAY_NAME[mob];
     const name = `${label} · Stage ${stage + 1}/${dungeon.numberOfStages}`;
-    return buildMobFighter(name, snapshot, mult, mob);
+    return {
+      fighter: buildMobFighter(name, snapshot, mult, mob),
+      mobType: mob,
+    };
   }
 
   const beginDungeon = useCallback(
@@ -145,7 +153,7 @@ export function DungeonView() {
         stats: { ...snap },
         currentHp: snap.hp,
       };
-      const e = spawnEnemyForStage(dungeon, 0, snap);
+      const { fighter: e, mobType } = spawnEnemyForStage(dungeon, 0, snap);
       const first = decideFirstTurn();
 
       setActiveDungeon(dungeon);
@@ -153,6 +161,7 @@ export function DungeonView() {
       setPendingReward(null);
       setClaimError(null);
       setWinner(null);
+      setActiveMobType(mobType);
       setPlayer(p);
       setEnemy(e);
       setTurn(first);
@@ -189,8 +198,13 @@ export function DungeonView() {
       setStageIndex(next);
       const snap = statsSnapshotRef.current;
       if (!snap) return;
-      const nextEnemy = spawnEnemyForStage(dungeon, next, snap);
+      const { fighter: nextEnemy, mobType } = spawnEnemyForStage(
+        dungeon,
+        next,
+        snap,
+      );
       const first = decideFirstTurn();
+      setActiveMobType(mobType);
       setPlayer(survivingPlayer);
       setEnemy(nextEnemy);
       setWinner(null);
@@ -311,6 +325,7 @@ export function DungeonView() {
     setClaimError(null);
     setPhase("select");
     setIsRunning(false);
+    setActiveMobType(null);
     statsSnapshotRef.current = null;
   }, [clearCombatTimer]);
 
@@ -465,37 +480,50 @@ export function DungeonView() {
                 {activeDungeon.numberOfStages}
               </p>
 
-              <div className="rounded-xl border border-zinc-800 bg-zinc-900/80 p-4">
-                <div className="flex justify-between text-sm">
-                  <span className="text-zinc-400">{player.name}</span>
-                  <span className="font-mono tabular-nums">
-                    {player.currentHp} / {player.stats.hp} HP
-                  </span>
-                </div>
-                <div className="mt-1 h-2 overflow-hidden rounded-full bg-zinc-800">
-                  <div
-                    className="h-full rounded-full bg-emerald-600 transition-[width]"
-                    style={{
-                      width: `${Math.max(0, (player.currentHp / player.stats.hp) * 100)}%`,
-                    }}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="flex flex-col gap-2">
+                  <CombatantPortrait
+                    src={getInventoryPortraitPath(profile?.class)}
+                    alt={player.name}
                   />
+                  <div className="rounded-xl border border-zinc-800 bg-zinc-900/80 p-3">
+                    <div className="flex justify-between text-xs sm:text-sm">
+                      <span className="truncate text-zinc-400">{player.name}</span>
+                      <span className="shrink-0 font-mono tabular-nums text-emerald-200/90">
+                        {player.currentHp} / {player.stats.hp}
+                      </span>
+                    </div>
+                    <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-zinc-800">
+                      <div
+                        className="h-full rounded-full bg-emerald-600 transition-[width]"
+                        style={{
+                          width: `${Math.max(0, (player.currentHp / player.stats.hp) * 100)}%`,
+                        }}
+                      />
+                    </div>
+                  </div>
                 </div>
-              </div>
-
-              <div className="rounded-xl border border-zinc-800 bg-zinc-900/80 p-4">
-                <div className="flex justify-between text-sm">
-                  <span className="text-zinc-400">{enemy.name}</span>
-                  <span className="font-mono tabular-nums">
-                    {enemy.currentHp} / {enemy.stats.hp} HP
-                  </span>
-                </div>
-                <div className="mt-1 h-2 overflow-hidden rounded-full bg-zinc-800">
-                  <div
-                    className="h-full rounded-full bg-rose-600 transition-[width]"
-                    style={{
-                      width: `${Math.max(0, (enemy.currentHp / enemy.stats.hp) * 100)}%`,
-                    }}
+                <div className="flex flex-col gap-2">
+                  <CombatantPortrait
+                    src={getMobPortraitPath(activeMobType)}
+                    alt={enemy.name}
                   />
+                  <div className="rounded-xl border border-zinc-800 bg-zinc-900/80 p-3">
+                    <div className="flex justify-between text-xs sm:text-sm">
+                      <span className="truncate text-zinc-400">{enemy.name}</span>
+                      <span className="shrink-0 font-mono tabular-nums text-rose-200/90">
+                        {enemy.currentHp} / {enemy.stats.hp}
+                      </span>
+                    </div>
+                    <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-zinc-800">
+                      <div
+                        className="h-full rounded-full bg-rose-600 transition-[width]"
+                        style={{
+                          width: `${Math.max(0, (enemy.currentHp / enemy.stats.hp) * 100)}%`,
+                        }}
+                      />
+                    </div>
+                  </div>
                 </div>
               </div>
 
