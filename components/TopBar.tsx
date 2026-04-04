@@ -4,6 +4,8 @@ import type { CombatTotals } from "@/lib/inventoryUtils";
 
 export type TopBarProps = {
   level?: number;
+  xp?: number;
+  xpToNext?: number;
   username: string;
   gold: number;
   energy: number;
@@ -51,12 +53,16 @@ function BoltIcon({ className }: { className?: string }) {
 
 export function TopBar({
   level = 1,
+  xp = 0,
+  xpToNext = 150,
   username,
   gold,
   energy,
   energyMax,
   combatTotals,
 }: TopBarProps) {
+  const xpCap = xpToNext > 0 ? xpToNext : 1;
+  const xpPct = Math.min(100, (xp / xpCap) * 100);
   return (
     <header className="relative z-20 mx-3 mt-3 shrink-0 rounded-2xl border border-white/10 bg-black/45 px-3 py-2.5 shadow-[0_0_24px_rgba(0,0,0,0.45),inset_0_1px_0_rgba(255,255,255,0.06)] backdrop-blur-md">
       <div className="flex items-center justify-between gap-2">
@@ -90,6 +96,23 @@ export function TopBar({
               {energy}/{energyMax}
             </span>
           </div>
+        </div>
+      </div>
+      <div
+        className="mt-2 border-t border-white/5 pt-2"
+        title="Experience"
+      >
+        <div className="mb-1 flex justify-between text-[10px] tabular-nums text-zinc-500">
+          <span>XP</span>
+          <span className="text-zinc-400">
+            {xp} / {xpCap}
+          </span>
+        </div>
+        <div className="h-1.5 overflow-hidden rounded-full bg-black/40">
+          <div
+            className="h-full rounded-full bg-gradient-to-r from-amber-600 to-amber-400"
+            style={{ width: `${xpPct}%` }}
+          />
         </div>
       </div>
       <div

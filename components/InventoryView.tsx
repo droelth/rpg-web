@@ -11,19 +11,17 @@ import { getDb } from "@/lib/firebase";
 import { getOrCreateUser, type UserDocument } from "@/lib/getOrCreateUser";
 import type { CombatTotals } from "@/lib/inventoryUtils";
 import {
-  calculateTotalStats,
   ensureInventoryDefaults,
-  getEquippedItemsFromCatalog,
+  equipItem,
+  findInventoryInstance,
+  getEffectiveCombatTotals,
   parseBaseStats,
   persistEffectiveCombatStats,
   simulateEquip,
 } from "@/lib/inventoryUtils";
 import { describeItemStats } from "@/lib/itemDisplay";
-import {
-  getItemRarity,
-  rarityLabelClass,
-} from "@/lib/itemRarityStyles";
-import { canonicalItemId, resolveInventory, resolveItem } from "@/lib/items";
+import { rarityLabelClass } from "@/lib/itemRarityStyles";
+import { resolveInventoryEntries, resolveItem } from "@/lib/items";
 import { EmptyEquipSlot, ItemCard } from "@/components/ItemCard";
 import { useAuth } from "@/hooks/useAuth";
 
@@ -129,10 +127,11 @@ export function InventoryView() {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [userDoc, setUserDoc] = useState<UserDocument | null>(null);
-  const [selected, setSelected] = useState<Item | null>(null);
+  const [selectedInvIndex, setSelectedInvIndex] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
 
   const refresh = useCallback(async (uid: string) => {
+    await getOrCreateUser(uid);
     await ensureInventoryDefaults(uid);
     await persistEffectiveCombatStats(uid);
     const d = await getOrCreateUser(uid);
@@ -166,29 +165,48 @@ export function InventoryView() {
     [userDoc],
   );
 
+  const inventoryRows = useMemo(
+    () => (userDoc ? resolveInventoryEntries(userDoc.inventory) : []),
+    [userDoc],
+  );
+
+  const selectedRow =
+    selectedInvIndex !== null &&
+    selectedInvIndex >= 0 &&
+    selectedInvIndex < inventoryRows.length
+      ? inventoryRows[selectedInvIndex]
+      : null;
+  const selected = selectedRow?.item ?? null;
+
   const preview = useMemo(() => {
-    if (!userDoc || !base || !selected) return null;
-    return simulateEquip(base, userDoc.equipped, selected);
-  }, [userDoc, base, selected]);
-
-  const inventoryItems = useMemo(
-    () => (userDoc ? resolveInventory(userDoc.inventory) : []),
-    [userDoc],
-  );
-
-  const equippedItems = useMemo(
-    () => (userDoc ? getEquippedItemsFromCatalog(userDoc.equipped) : []),
-    [userDoc],
-  );
+    if (!userDoc || !base || !selected || !selectedRow) return null;
+    return simulateEquip(
+      base,
+      userDoc.equipped,
+      userDoc.inventory,
+      selectedRow.instance.instanceId,
+      selected,
+    );
+  }, [userDoc, base, selected, selectedRow]);
 
   const currentTotals = useMemo(
-    () => (base ? calculateTotalStats(base, equippedItems) : null),
-    [base, equippedItems],
+    () =>
+      userDoc
+        ? getEffectiveCombatTotals({
+            stats: userDoc.stats,
+            equipped: userDoc.equipped,
+            inventory: userDoc.inventory,
+          })
+        : null,
+    [userDoc],
   );
 
   const selectedStatLines = useMemo(
-    () => (selected ? describeItemStats(selected) : []),
-    [selected],
+    () =>
+      selected && selectedRow
+        ? describeItemStats(selected, selectedRow.instance)
+        : [],
+    [selected, selectedRow],
   );
 
   const portraitSrc = useMemo(
@@ -196,31 +214,43 @@ export function InventoryView() {
     [userDoc],
   );
 
-  const equippedIdForSelectedSlot =
+  const equippedInstanceIdForSelectedSlot =
     selected && userDoc ? userDoc.equipped[selected.type] : null;
   const isSelectedEquipped =
-    equippedIdForSelectedSlot != null &&
-    selected != null &&
-    canonicalItemId(equippedIdForSelectedSlot) === selected.id;
+    selectedRow != null &&
+    equippedInstanceIdForSelectedSlot === selectedRow.instance.instanceId;
+
+  const shouldOfferSwap =
+    equippedInstanceIdForSelectedSlot != null &&
+    selectedRow != null &&
+    equippedInstanceIdForSelectedSlot !== selectedRow.instance.instanceId;
+
+  const equippedItemToReplace =
+    shouldOfferSwap && equippedInstanceIdForSelectedSlot != null && userDoc
+      ? (() => {
+          const inst = findInventoryInstance(
+            userDoc.inventory,
+            equippedInstanceIdForSelectedSlot,
+          );
+          return inst ? resolveItem(inst.itemId) : undefined;
+        })()
+      : undefined;
 
   async function handleEquip() {
-    if (!user || !userDoc || !selected || saving) return;
-    if (!userDoc.inventory.includes(selected.id)) {
+    if (!user || !userDoc || !selectedRow || saving) return;
+    const iid = selectedRow.instance.instanceId;
+    if (!userDoc.inventory.some((e) => e.instanceId === iid)) {
       setErr("Item is not in your inventory.");
       return;
     }
     setSaving(true);
     setErr(null);
     try {
-      const next: EquippedState = {
-        ...userDoc.equipped,
-        [selected.type]: selected.id,
-      };
-      await updateDoc(userFirestoreRef(user.uid), { equipped: next });
+      await equipItem(user.uid, iid);
       await refresh(user.uid);
     } catch (e) {
       console.error(e);
-      setErr("Could not equip item.");
+      setErr(shouldOfferSwap ? "Could not swap item." : "Could not equip item.");
     } finally {
       setSaving(false);
     }
@@ -234,7 +264,7 @@ export function InventoryView() {
       const next = { ...userDoc.equipped, [slot]: null };
       await updateDoc(userFirestoreRef(user.uid), { equipped: next });
       await refresh(user.uid);
-      setSelected(null);
+      setSelectedInvIndex(null);
     } catch (e) {
       console.error(e);
       setErr("Could not unequip.");
@@ -249,9 +279,11 @@ export function InventoryView() {
 
   function slotItem(slot: ItemType): Item | undefined {
     if (!userDoc) return;
-    const id = userDoc.equipped[slot];
-    if (!id) return;
-    return resolveItem(id);
+    const iid = userDoc.equipped[slot];
+    if (!iid) return;
+    const inst = findInventoryInstance(userDoc.inventory, iid);
+    if (!inst) return;
+    return resolveItem(inst.itemId);
   }
 
   if (authError) {
@@ -351,7 +383,11 @@ export function InventoryView() {
                 Equipped
               </p>
               {SLOT_ORDER.map((slot) => {
-                const it = slotItem(slot);
+                const iid = userDoc.equipped[slot];
+                const equippedRow = iid
+                  ? inventoryRows.find((r) => r.instance.instanceId === iid)
+                  : undefined;
+                const it = equippedRow?.item ?? slotItem(slot);
                 return (
                   <div key={slot} className="space-y-1">
                     <p className="px-0.5 text-[10px] font-medium uppercase tracking-wider text-zinc-600">
@@ -360,18 +396,28 @@ export function InventoryView() {
                     {it ? (
                       <ItemCard
                         item={it}
+                        displayRarity={equippedRow?.displayRarity}
                         size="sm"
                         layout="row"
-                        selected={selected?.id === it.id}
+                        selected={
+                          selectedRow != null &&
+                          iid === selectedRow.instance.instanceId
+                        }
                         disabled={saving}
-                        onClick={() => setSelected(it)}
+                        onClick={() => {
+                          if (!iid) return;
+                          const idx = inventoryRows.findIndex(
+                            (r) => r.instance.instanceId === iid,
+                          );
+                          setSelectedInvIndex(idx >= 0 ? idx : null);
+                        }}
                         className="w-full"
                       />
                     ) : (
                       <EmptyEquipSlot
                         slotLabel={SLOT_LABEL[slot]}
                         disabled={saving}
-                        onClick={() => setSelected(null)}
+                        onClick={() => setSelectedInvIndex(null)}
                       />
                     )}
                   </div>
@@ -387,15 +433,16 @@ export function InventoryView() {
             </p>
             <div className="flex justify-center sm:justify-start">
               <div className="grid w-full max-w-3xl grid-cols-3 gap-3 sm:grid-cols-4 sm:gap-4 justify-items-center">
-                {inventoryItems.map((item) => (
+                {inventoryRows.map((row, i) => (
                   <ItemCard
-                    key={item.id}
-                    item={item}
+                    key={`inv-${i}`}
+                    item={row.item}
+                    displayRarity={row.displayRarity}
                     size="md"
                     layout="stack"
-                    selected={selected?.id === item.id}
+                    selected={selectedInvIndex === i}
                     disabled={saving}
-                    onClick={() => setSelected(item)}
+                    onClick={() => setSelectedInvIndex(i)}
                     className="mx-auto w-full max-w-[168px]"
                   />
                 ))}
@@ -404,15 +451,15 @@ export function InventoryView() {
 
             {/* Selected panel */}
             <div className="rounded-2xl border border-white/10 bg-gradient-to-b from-zinc-900/85 via-zinc-950/90 to-black/80 p-5 shadow-[0_0_48px_rgba(0,0,0,0.45),inset_0_1px_0_rgba(255,255,255,0.06)] backdrop-blur-xl">
-              {selected ? (
+              {selected && selectedRow ? (
                 <>
                   <h2 className="text-xl font-bold tracking-tight text-zinc-50">
                     {selected.name}
                   </h2>
                   <p
-                    className={`mt-1 text-sm font-semibold ${rarityLabelClass[getItemRarity(selected)]}`}
+                    className={`mt-1 text-sm font-semibold ${rarityLabelClass[selectedRow.displayRarity]}`}
                   >
-                    {rarityDisplayName(getItemRarity(selected))}
+                    {rarityDisplayName(selectedRow.displayRarity)}
                   </p>
                   <p className="mt-0.5 text-xs capitalize text-violet-300/70">
                     {selected.type}
@@ -436,6 +483,16 @@ export function InventoryView() {
                     />
                   ) : null}
 
+                  {shouldOfferSwap ? (
+                    <p className="mt-4 text-xs text-zinc-500">
+                      Replaces current {SLOT_LABEL[selected.type]}
+                      {equippedItemToReplace
+                        ? `: ${equippedItemToReplace.name}`
+                        : ""}
+                      .
+                    </p>
+                  ) : null}
+
                   <div className="mt-5 flex flex-wrap gap-2">
                     {!isSelectedEquipped ? (
                       <button
@@ -444,7 +501,7 @@ export function InventoryView() {
                         onClick={handleEquip}
                         className="rounded-xl bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white shadow-lg shadow-violet-900/40 transition hover:bg-violet-500 disabled:opacity-40"
                       >
-                        Equip
+                        {shouldOfferSwap ? "Swap" : "Equip"}
                       </button>
                     ) : (
                       <button

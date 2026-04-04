@@ -74,6 +74,9 @@ export default function Home() {
   return (
     <MainMenu
       username={userDoc.username}
+      level={userDoc.level}
+      xp={userDoc.xp}
+      xpToNext={userDoc.xpToNext}
       gold={userDoc.gold}
       energy={userDoc.energy}
       combatTotals={userDoc.effectiveStats}

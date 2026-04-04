@@ -1,0 +1,643 @@
+"use client";
+
+import Link from "next/link";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  decideFirstTurn,
+  runCombatStep,
+  type Fighter,
+  type Stats,
+} from "@/lib/combat";
+import type { DungeonDefinition } from "@/lib/dungeons";
+import { DUNGEONS } from "@/lib/dungeons";
+import { persistDungeonClaim } from "@/lib/dungeonFirestore";
+import type { DungeonDrop } from "@/lib/dungeonRewards";
+import { rollDungeonDrop } from "@/lib/dungeonRewards";
+import { getOrCreateUser, type UserDocument } from "@/lib/getOrCreateUser";
+import { INITIAL_USER_ENERGY } from "@/lib/getOrCreateUser";
+import { ensureInventoryDefaults } from "@/lib/inventoryUtils";
+import type { CombatTotals } from "@/lib/inventoryUtils";
+import { generateInstanceId } from "@/lib/items";
+import {
+  buildMobFighter,
+  MOB_DISPLAY_NAME,
+  randomMobType,
+} from "@/lib/mobs";
+import { rarityLabelClass } from "@/lib/itemRarityStyles";
+import { useAuth } from "@/hooks/useAuth";
+import { TopBar } from "@/components/TopBar";
+
+type Phase =
+  | "loading"
+  | "select"
+  | "combat"
+  | "reward"
+  | "failed"
+  | "claiming";
+
+type PendingReward = {
+  gold: number;
+  xp: number;
+  drop: DungeonDrop;
+};
+
+export function DungeonView() {
+  const { user, loading: authLoading, authError } = useAuth();
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [phase, setPhase] = useState<Phase>("loading");
+  const [profile, setProfile] = useState<UserDocument | null>(null);
+
+  const [activeDungeon, setActiveDungeon] = useState<DungeonDefinition | null>(
+    null,
+  );
+  const [stageIndex, setStageIndex] = useState(0);
+  const statsSnapshotRef = useRef<Stats | null>(null);
+  const classIdRef = useRef<string | null>(null);
+
+  const [player, setPlayer] = useState<Fighter | null>(null);
+  const [enemy, setEnemy] = useState<Fighter | null>(null);
+  const [turn, setTurn] = useState<"player" | "enemy">("player");
+  const [log, setLog] = useState<string[]>([]);
+  const [winner, setWinner] = useState<"player" | "enemy" | null>(null);
+  const [isRunning, setIsRunning] = useState(false);
+  const [speed, setSpeed] = useState<1 | 2>(1);
+  const [pendingReward, setPendingReward] = useState<PendingReward | null>(
+    null,
+  );
+  const [claimError, setClaimError] = useState<string | null>(null);
+
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const logScrollRef = useRef<HTMLUListElement | null>(null);
+
+  const activeDungeonRef = useRef<DungeonDefinition | null>(null);
+  const stageIndexRef = useRef(0);
+  activeDungeonRef.current = activeDungeon;
+  stageIndexRef.current = stageIndex;
+
+  const isFinished = winner !== null;
+
+  const clearCombatTimer = useCallback(() => {
+    if (timerRef.current != null) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    if (authLoading) return;
+    if (authError) {
+      setPhase("select");
+      setLoadError(authError);
+      return;
+    }
+    if (!user) {
+      setPhase("select");
+      setLoadError(null);
+      setProfile(null);
+      return;
+    }
+
+    let cancelled = false;
+    (async () => {
+      try {
+        await ensureInventoryDefaults(user.uid);
+        const doc = await getOrCreateUser(user.uid);
+        if (cancelled) return;
+        setProfile(doc);
+        setLoadError(null);
+        setPhase("select");
+      } catch (e) {
+        console.error(e);
+        if (!cancelled) {
+          setLoadError("Could not load your profile.");
+          setPhase("select");
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authLoading, authError, user]);
+
+  function spawnEnemyForStage(
+    dungeon: DungeonDefinition,
+    stage: number,
+    snapshot: Stats,
+  ): Fighter {
+    const mult = dungeon.stageMultipliers[stage] ?? 1;
+    const mob = randomMobType();
+    const label = MOB_DISPLAY_NAME[mob];
+    const name = `${label} · Stage ${stage + 1}/${dungeon.numberOfStages}`;
+    return buildMobFighter(name, snapshot, mult, mob);
+  }
+
+  const beginDungeon = useCallback(
+    (dungeon: DungeonDefinition) => {
+      if (!profile || !user) return;
+      const snap: Stats = { ...profile.effectiveStats };
+      statsSnapshotRef.current = snap;
+      classIdRef.current = profile.class;
+
+      const name = profile.username?.trim() || "Hero";
+      const p: Fighter = {
+        name,
+        stats: { ...snap },
+        currentHp: snap.hp,
+      };
+      const e = spawnEnemyForStage(dungeon, 0, snap);
+      const first = decideFirstTurn();
+
+      setActiveDungeon(dungeon);
+      setStageIndex(0);
+      setPendingReward(null);
+      setClaimError(null);
+      setWinner(null);
+      setPlayer(p);
+      setEnemy(e);
+      setTurn(first);
+      setLog([
+        `Entering ${dungeon.name}…`,
+        first === "player" ? "You take the first turn!" : `${e.name} moves first!`,
+      ]);
+      setPhase("combat");
+      setIsRunning(true);
+    },
+    [profile, user],
+  );
+
+  const handlePlayerWonStage = useCallback(
+    (survivingPlayer: Fighter) => {
+      const dungeon = activeDungeonRef.current;
+      const s = stageIndexRef.current;
+      if (!dungeon) return;
+
+      if (s >= dungeon.numberOfStages - 1) {
+        const drop = rollDungeonDrop(classIdRef.current);
+        setPendingReward({
+          gold: dungeon.goldReward,
+          xp: dungeon.xpReward,
+          drop,
+        });
+        setPhase("reward");
+        setWinner("player");
+        setIsRunning(false);
+        return;
+      }
+
+      const next = s + 1;
+      setStageIndex(next);
+      const snap = statsSnapshotRef.current;
+      if (!snap) return;
+      const nextEnemy = spawnEnemyForStage(dungeon, next, snap);
+      const first = decideFirstTurn();
+      setPlayer(survivingPlayer);
+      setEnemy(nextEnemy);
+      setWinner(null);
+      setTurn(first);
+      setLog((prev) => [
+        ...prev,
+        `Stage ${s + 1} cleared!`,
+        `--- Stage ${next + 1} ---`,
+        first === "player"
+          ? "You take the first turn!"
+          : `${nextEnemy.name} moves first!`,
+      ]);
+      setIsRunning(true);
+    },
+    [],
+  );
+
+  const handleCombatLoss = useCallback(() => {
+    setPhase("failed");
+    setIsRunning(false);
+  }, []);
+
+  useEffect(() => {
+    if (phase !== "combat" || !isRunning || isFinished || !player || !enemy) {
+      return;
+    }
+
+    const delayMs = 1000 / speed;
+    const id = setTimeout(() => {
+      timerRef.current = null;
+      const step = runCombatStep({ player, enemy, turn });
+
+      setLog((prev) => [...prev, ...step.logEntries]);
+      setPlayer(step.player);
+      setEnemy(step.enemy);
+      setTurn(step.turn);
+
+      if (step.winner === "player") {
+        setWinner("player");
+        setIsRunning(false);
+        handlePlayerWonStage(step.player);
+      } else if (step.winner === "enemy") {
+        setWinner("enemy");
+        setIsRunning(false);
+        handleCombatLoss();
+      }
+    }, delayMs);
+
+    timerRef.current = id;
+    return () => {
+      clearTimeout(id);
+      if (timerRef.current === id) timerRef.current = null;
+    };
+  }, [
+    phase,
+    isRunning,
+    isFinished,
+    speed,
+    turn,
+    player,
+    enemy,
+    handlePlayerWonStage,
+    handleCombatLoss,
+  ]);
+
+  const handleSkipCombat = useCallback(() => {
+    if (!player || !enemy || isFinished || phase !== "combat") return;
+    clearCombatTimer();
+
+    let p = player;
+    let e = enemy;
+    let t = turn;
+    let w: "player" | "enemy" | null = null;
+    const lines = [...log];
+
+    while (!w) {
+      const step = runCombatStep({ player: p, enemy: e, turn: t });
+      lines.push(...step.logEntries);
+      p = step.player;
+      e = step.enemy;
+      t = step.turn;
+      w = step.winner;
+    }
+
+    setLog(lines);
+    setPlayer(p);
+    setEnemy(e);
+    setTurn(t);
+    setWinner(w);
+    setIsRunning(false);
+
+    if (w === "player") {
+      handlePlayerWonStage(p);
+    } else {
+      handleCombatLoss();
+    }
+  }, [
+    player,
+    enemy,
+    turn,
+    log,
+    isFinished,
+    phase,
+    clearCombatTimer,
+    handlePlayerWonStage,
+    handleCombatLoss,
+  ]);
+
+  const resetToHub = useCallback(() => {
+    clearCombatTimer();
+    setActiveDungeon(null);
+    setStageIndex(0);
+    setPlayer(null);
+    setEnemy(null);
+    setWinner(null);
+    setLog([]);
+    setPendingReward(null);
+    setClaimError(null);
+    setPhase("select");
+    setIsRunning(false);
+    statsSnapshotRef.current = null;
+  }, [clearCombatTimer]);
+
+  const handleClaimReward = useCallback(async () => {
+    if (!user || !pendingReward) return;
+    setClaimError(null);
+    setPhase("claiming");
+    try {
+      const newInstance = {
+        instanceId: generateInstanceId(),
+        itemId: pendingReward.drop.itemId,
+        rarity: pendingReward.drop.rarity,
+      };
+      await persistDungeonClaim(user.uid, {
+        goldDelta: pendingReward.gold,
+        xpDelta: pendingReward.xp,
+        newInstance,
+      });
+      const fresh = await getOrCreateUser(user.uid);
+      setProfile(fresh);
+      resetToHub();
+    } catch (e) {
+      console.error(e);
+      setClaimError("Could not claim rewards. Try again.");
+      setPhase("reward");
+    }
+  }, [user, pendingReward, resetToHub]);
+
+  useLayoutEffect(() => {
+    const el = logScrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [log]);
+
+  const topBarTotals: CombatTotals = profile?.effectiveStats ?? {
+    hp: 0,
+    atk: 0,
+    def: 0,
+    crit: 0,
+  };
+
+  if (authError) {
+    return (
+      <div className="p-6 text-center text-red-400">
+        <p>{authError}</p>
+        <Link href="/" className="mt-4 inline-block text-amber-400 underline">
+          Home
+        </Link>
+      </div>
+    );
+  }
+
+  if (authLoading || phase === "loading") {
+    return (
+      <div className="flex min-h-dvh items-center justify-center bg-zinc-950 text-zinc-400">
+        Loading…
+      </div>
+    );
+  }
+
+  if (!user) {
+    return (
+      <div className="p-6 text-center text-zinc-400">
+        <p>Sign in required.</p>
+        <Link href="/" className="mt-4 inline-block text-amber-400 underline">
+          Home
+        </Link>
+      </div>
+    );
+  }
+
+  if (loadError && !profile) {
+    return (
+      <div className="p-6 text-center text-red-400">
+        <p>{loadError}</p>
+        <Link href="/" className="mt-4 inline-block text-amber-400 underline">
+          Home
+        </Link>
+      </div>
+    );
+  }
+
+  if (!profile) {
+    return null;
+  }
+
+  return (
+    <div className="relative flex min-h-dvh w-full justify-center overflow-hidden bg-black">
+      <div
+        className="pointer-events-none absolute inset-0 scale-105 bg-[url('/images/menu-bg.svg')] bg-cover bg-center opacity-40"
+        aria-hidden
+      />
+      <div className="pointer-events-none absolute inset-0 bg-black/60 backdrop-blur-[1px]" aria-hidden />
+
+      <div className="relative z-10 flex min-h-dvh w-full max-w-md flex-col">
+        <TopBar
+          level={profile.level}
+          xp={profile.xp}
+          xpToNext={profile.xpToNext}
+          username={profile.username?.trim() || "Adventurer"}
+          gold={profile.gold}
+          energy={profile.energy}
+          energyMax={INITIAL_USER_ENERGY}
+          combatTotals={topBarTotals}
+        />
+
+        <div className="flex flex-1 flex-col gap-4 overflow-y-auto px-4 pb-8 pt-2 text-zinc-100">
+          <div className="flex items-center justify-between">
+            <Link
+              href="/"
+              className="text-sm text-amber-500/90 hover:text-amber-400"
+            >
+              ← Main menu
+            </Link>
+            <h1 className="text-lg font-semibold text-amber-100/95">Dungeons</h1>
+            <span className="w-16" aria-hidden />
+          </div>
+
+          {phase === "select" && (
+            <div className="flex flex-col gap-3">
+              <p className="text-sm text-zinc-400">
+                Multi-stage runs: your HP carries between fights. Rewards drop only
+                after the final stage.
+              </p>
+              <ul className="flex flex-col gap-3">
+                {DUNGEONS.map((d) => (
+                  <li key={d.id}>
+                    <button
+                      type="button"
+                      onClick={() => beginDungeon(d)}
+                      className="w-full rounded-2xl border border-violet-500/35 bg-zinc-900/90 px-4 py-4 text-left shadow-lg transition hover:border-violet-400/50 hover:bg-zinc-900"
+                    >
+                      <span className="block text-base font-semibold text-violet-200">
+                        {d.name}
+                      </span>
+                      <span className="mt-1 block text-xs text-zinc-400">
+                        {d.numberOfStages} stage
+                        {d.numberOfStages > 1 ? "s" : ""} · +{d.goldReward} gold,
+                        +{d.xpReward} XP &amp; item on clear
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {phase === "combat" && player && enemy && activeDungeon && (
+            <>
+              <p className="text-center text-xs text-violet-300/90">
+                {activeDungeon.name} · Stage {stageIndex + 1}/
+                {activeDungeon.numberOfStages}
+              </p>
+
+              <div className="rounded-xl border border-zinc-800 bg-zinc-900/80 p-4">
+                <div className="flex justify-between text-sm">
+                  <span className="text-zinc-400">{player.name}</span>
+                  <span className="font-mono tabular-nums">
+                    {player.currentHp} / {player.stats.hp} HP
+                  </span>
+                </div>
+                <div className="mt-1 h-2 overflow-hidden rounded-full bg-zinc-800">
+                  <div
+                    className="h-full rounded-full bg-emerald-600 transition-[width]"
+                    style={{
+                      width: `${Math.max(0, (player.currentHp / player.stats.hp) * 100)}%`,
+                    }}
+                  />
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-zinc-800 bg-zinc-900/80 p-4">
+                <div className="flex justify-between text-sm">
+                  <span className="text-zinc-400">{enemy.name}</span>
+                  <span className="font-mono tabular-nums">
+                    {enemy.currentHp} / {enemy.stats.hp} HP
+                  </span>
+                </div>
+                <div className="mt-1 h-2 overflow-hidden rounded-full bg-zinc-800">
+                  <div
+                    className="h-full rounded-full bg-rose-600 transition-[width]"
+                    style={{
+                      width: `${Math.max(0, (enemy.currentHp / enemy.stats.hp) * 100)}%`,
+                    }}
+                  />
+                </div>
+              </div>
+
+              <p className="text-center text-sm text-zinc-400">
+                Turn:{" "}
+                <span className="font-medium text-zinc-200">
+                  {!isRunning && !isFinished
+                    ? "—"
+                    : turn === "player"
+                      ? player.name
+                      : enemy.name}
+                </span>
+              </p>
+
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                <div className="flex rounded-xl border border-zinc-700 bg-zinc-900/60 p-0.5">
+                  <button
+                    type="button"
+                    disabled={isFinished}
+                    onClick={() => setSpeed(1)}
+                    className={[
+                      "rounded-lg px-3 py-2 text-xs font-semibold transition",
+                      speed === 1
+                        ? "bg-violet-600 text-white"
+                        : "text-zinc-400 hover:text-zinc-200",
+                    ].join(" ")}
+                  >
+                    1x
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isFinished}
+                    onClick={() => setSpeed(2)}
+                    className={[
+                      "rounded-lg px-3 py-2 text-xs font-semibold transition",
+                      speed === 2
+                        ? "bg-violet-600 text-white"
+                        : "text-zinc-400 hover:text-zinc-200",
+                    ].join(" ")}
+                  >
+                    2x
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleSkipCombat}
+                  disabled={isFinished}
+                  className="rounded-xl border border-zinc-600 bg-zinc-800 px-4 py-2 text-sm font-semibold text-zinc-100 transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  Skip
+                </button>
+              </div>
+
+              <div className="flex min-h-0 flex-1 flex-col">
+                <p className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500">
+                  Log
+                </p>
+                <ul
+                  ref={logScrollRef}
+                  className="max-h-56 overflow-y-auto rounded-lg border border-zinc-800 bg-black/40 p-3 text-sm text-zinc-300"
+                >
+                  {log.map((line, i) => (
+                    <li
+                      key={i}
+                      className="border-b border-zinc-800/80 py-1.5 last:border-0"
+                    >
+                      {line}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </>
+          )}
+
+          {(phase === "reward" || phase === "claiming") &&
+            pendingReward &&
+            activeDungeon && (
+            <div className="flex flex-col gap-4 rounded-2xl border border-amber-500/40 bg-zinc-900/95 p-5 shadow-xl">
+              <h2 className="text-center text-xl font-bold text-amber-200">
+                Dungeon cleared!
+              </h2>
+              <p className="text-center text-sm text-zinc-400">
+                {activeDungeon.name}
+              </p>
+              <div className="grid gap-2 text-sm">
+                <div className="flex justify-between rounded-lg bg-black/30 px-3 py-2">
+                  <span className="text-zinc-400">Gold</span>
+                  <span className="font-mono text-amber-300">
+                    +{pendingReward.gold}
+                  </span>
+                </div>
+                <div className="flex justify-between rounded-lg bg-black/30 px-3 py-2">
+                  <span className="text-zinc-400">XP</span>
+                  <span className="font-mono text-cyan-300">
+                    +{pendingReward.xp}
+                  </span>
+                </div>
+                <div className="rounded-lg border border-zinc-700 bg-black/30 px-3 py-3">
+                  <p className="text-xs uppercase tracking-wide text-zinc-500">
+                    Item dropped
+                  </p>
+                  <p className="mt-1 font-semibold text-zinc-100">
+                    {pendingReward.drop.item.name}
+                  </p>
+                  <p
+                    className={`text-sm capitalize ${rarityLabelClass[pendingReward.drop.rarity]}`}
+                  >
+                    {pendingReward.drop.rarity}
+                  </p>
+                </div>
+              </div>
+              {claimError ? (
+                <p className="text-center text-sm text-red-400">{claimError}</p>
+              ) : null}
+              <button
+                type="button"
+                onClick={handleClaimReward}
+                disabled={phase === "claiming"}
+                className="rounded-xl bg-gradient-to-r from-amber-600 to-orange-600 py-3.5 text-center text-sm font-bold text-zinc-950 shadow-lg transition hover:from-amber-500 hover:to-orange-500 disabled:opacity-50"
+              >
+                {phase === "claiming" ? "Claiming…" : "Claim Reward"}
+              </button>
+            </div>
+          )}
+
+          {phase === "failed" && (
+            <div className="flex flex-col items-center gap-4 rounded-2xl border border-rose-500/35 bg-zinc-900/95 p-8">
+              <h2 className="text-xl font-bold text-rose-300">Dungeon Failed</h2>
+              <p className="text-center text-sm text-zinc-400">
+                You were defeated. No rewards.
+              </p>
+              <button
+                type="button"
+                onClick={resetToHub}
+                className="rounded-xl border border-zinc-600 bg-zinc-800 px-6 py-3 text-sm font-semibold text-zinc-100 hover:bg-zinc-700"
+              >
+                Back to dungeons
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

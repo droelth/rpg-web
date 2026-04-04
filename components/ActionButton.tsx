@@ -1,11 +1,13 @@
 "use client";
 
+import Link from "next/link";
 import type { ReactNode } from "react";
 
 export type ActionTheme =
   | "pvp"
   | "dungeon"
   | "shop"
+  | "forge"
   | "inventory"
   | "tavern"
   | "profile";
@@ -32,6 +34,12 @@ const THEME_STYLES: Record<
     glow: "hover:shadow-[0_0_28px_rgba(251,191,36,0.35)]",
     border: "border-amber-400/30",
   },
+  forge: {
+    gradient:
+      "from-orange-700 via-orange-900 to-stone-950 hover:from-orange-600 hover:via-orange-800 hover:to-stone-900",
+    glow: "hover:shadow-[0_0_28px_rgba(249,115,22,0.35)]",
+    border: "border-orange-400/30",
+  },
   inventory: {
     gradient:
       "from-violet-600 via-purple-800 to-violet-950 hover:from-violet-500 hover:via-purple-700 hover:to-violet-900",
@@ -57,28 +65,48 @@ export type ActionButtonProps = {
   theme: ActionTheme;
   icon: ReactNode;
   onClick?: () => void;
+  /** When set, renders a Next.js `Link` (preferred for in-app routes). */
+  href?: string;
 };
 
-export function ActionButton({ label, theme, icon, onClick }: ActionButtonProps) {
+export function ActionButton({
+  label,
+  theme,
+  icon,
+  onClick,
+  href,
+}: ActionButtonProps) {
   const t = THEME_STYLES[theme];
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={[
-        "flex w-full items-center gap-3 rounded-2xl border bg-gradient-to-br px-4 py-4 text-left shadow-lg transition-all duration-200",
-        "active:scale-[0.98] active:brightness-95",
-        t.gradient,
-        t.glow,
-        t.border,
-      ].join(" ")}
-    >
+  const className = [
+    "flex w-full items-center gap-3 rounded-2xl border bg-gradient-to-br px-4 py-4 text-left shadow-lg transition-all duration-200",
+    "active:scale-[0.98] active:brightness-95",
+    t.gradient,
+    t.glow,
+    t.border,
+  ].join(" ");
+
+  const content = (
+    <>
       <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-black/25 text-white shadow-inner ring-1 ring-white/10">
         {icon}
       </span>
       <span className="font-semibold tracking-wide text-white drop-shadow-sm">
         {label}
       </span>
+    </>
+  );
+
+  if (href) {
+    return (
+      <Link href={href} className={className}>
+        {content}
+      </Link>
+    );
+  }
+
+  return (
+    <button type="button" onClick={onClick} className={className}>
+      {content}
     </button>
   );
 }

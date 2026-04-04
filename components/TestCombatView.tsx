@@ -10,6 +10,7 @@ import {
 } from "@/lib/combat";
 import { getOrCreateUser } from "@/lib/getOrCreateUser";
 import { ensureInventoryDefaults } from "@/lib/inventoryUtils";
+import { persistCombatProgression } from "@/lib/levelSystem";
 import { useAuth } from "@/hooks/useAuth";
 
 const DUMMY_TEMPLATE: Fighter = {
@@ -36,6 +37,11 @@ export function TestCombatView() {
   const [winner, setWinner] = useState<"player" | "enemy" | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const [speed, setSpeed] = useState<1 | 2>(1);
+  const [levelProgress, setLevelProgress] = useState<{
+    level: number;
+    xp: number;
+    xpToNext: number;
+  } | null>(null);
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const logScrollRef = useRef<HTMLUListElement | null>(null);
@@ -48,6 +54,40 @@ export function TestCombatView() {
       timerRef.current = null;
     }
   }, []);
+
+  const finalizeCombat = useCallback(
+    (w: "player" | "enemy") => {
+      setWinner(w);
+      setIsRunning(false);
+      if (!user) return;
+      void (async () => {
+        try {
+          await persistCombatProgression(
+            user.uid,
+            w === "player" ? "win" : "loss",
+          );
+          const doc = await getOrCreateUser(user.uid);
+          setLevelProgress({
+            level: doc.level,
+            xp: doc.xp,
+            xpToNext: doc.xpToNext,
+          });
+          setPlayer((prev) => {
+            if (!prev) return prev;
+            const nextMax = doc.effectiveStats.hp;
+            return {
+              ...prev,
+              stats: { ...doc.effectiveStats },
+              currentHp: Math.min(prev.currentHp, nextMax),
+            };
+          });
+        } catch (e) {
+          console.error(e);
+        }
+      })();
+    },
+    [user],
+  );
 
   useEffect(() => {
     if (authLoading) return;
@@ -75,6 +115,11 @@ export function TestCombatView() {
         };
         const e = cloneFighter(DUMMY_TEMPLATE);
         const first = decideFirstTurn();
+        setLevelProgress({
+          level: userDoc.level,
+          xp: userDoc.xp,
+          xpToNext: userDoc.xpToNext,
+        });
         setPlayer(p);
         setEnemy(e);
         setTurn(first);
@@ -110,8 +155,7 @@ export function TestCombatView() {
       setTurn(step.turn);
       setLog((prev) => [...prev, ...step.logEntries]);
       if (step.winner) {
-        setWinner(step.winner);
-        setIsRunning(false);
+        finalizeCombat(step.winner);
       }
     }, delayMs);
 
@@ -151,9 +195,8 @@ export function TestCombatView() {
     setEnemy(e);
     setTurn(t);
     setLog(lines);
-    setWinner(w);
-    setIsRunning(false);
-  }, [player, enemy, turn, log, isFinished, clearCombatTimer]);
+    finalizeCombat(w);
+  }, [player, enemy, turn, log, isFinished, clearCombatTimer, finalizeCombat]);
 
   if (authError) {
     return (
@@ -208,6 +251,30 @@ export function TestCombatView() {
         <h1 className="text-lg font-semibold">Combat test</h1>
         <span className="w-16" aria-hidden />
       </div>
+
+      {levelProgress && levelProgress.xpToNext > 0 ? (
+        <div className="rounded-xl border border-zinc-800 bg-zinc-900/80 px-4 py-3">
+          <div className="flex justify-between text-xs text-zinc-400">
+            <span>
+              Level{" "}
+              <span className="font-semibold text-amber-200">
+                {levelProgress.level}
+              </span>
+            </span>
+            <span className="font-mono tabular-nums text-zinc-300">
+              {levelProgress.xp} / {levelProgress.xpToNext} XP
+            </span>
+          </div>
+          <div className="mt-2 h-2 overflow-hidden rounded-full bg-zinc-800">
+            <div
+              className="h-full rounded-full bg-amber-500 transition-[width]"
+              style={{
+                width: `${Math.min(100, (levelProgress.xp / levelProgress.xpToNext) * 100)}%`,
+              }}
+            />
+          </div>
+        </div>
+      ) : null}
 
       <div className="rounded-xl border border-zinc-800 bg-zinc-900/80 p-4">
         <div className="flex justify-between text-sm">

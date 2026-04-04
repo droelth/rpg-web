@@ -16,8 +16,21 @@ export type Item = {
   stats: ItemStats;
   /** Visual tier; stored only in the item catalog, not in Firebase. */
   rarity: ItemRarity;
+  /** If set, item appears in that class’s shop pool only. Omit or empty = any class fallback. */
+  classes?: string[];
 };
 
+/**
+ * One inventory stack row in Firestore. `itemId` is a catalog key in `items`.
+ * `rarity` = shop roll when set; omit to use catalog `Item.rarity` in UI.
+ */
+export type InventoryInstance = {
+  instanceId: string;
+  itemId: string;
+  rarity?: ItemRarity;
+};
+
+/** Each slot holds an inventory row’s `instanceId`, or null. */
 export type EquippedState = {
   weapon: string | null;
   armor: string | null;

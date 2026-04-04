@@ -1,9 +1,11 @@
-import type { Item } from "@/types/item";
+import type { Item, ItemRarity } from "@/types/item";
 import { formatItemStatHint, slotTypeGlyph } from "@/lib/itemDisplay";
 import { getItemRarity, itemCardClassNames } from "@/lib/itemRarityStyles";
 
 export type ItemCardProps = {
   item: Item;
+  /** Shop / UI override; defaults to catalog `item.rarity`. */
+  displayRarity?: ItemRarity;
   selected?: boolean;
   disabled?: boolean;
   onClick?: () => void;
@@ -15,6 +17,7 @@ export type ItemCardProps = {
 
 export function ItemCard({
   item,
+  displayRarity,
   selected = false,
   disabled = false,
   onClick,
@@ -22,7 +25,9 @@ export function ItemCard({
   layout = "stack",
   className = "",
 }: ItemCardProps) {
-  const rarity = getItemRarity(item);
+  const rarity = displayRarity ?? getItemRarity(item);
+  const statHintInstance =
+    displayRarity !== undefined ? { rarity: displayRarity } : undefined;
   const interactive = Boolean(onClick) && !disabled;
   const cardClass = itemCardClassNames(rarity, { selected, interactive });
 
@@ -78,12 +83,16 @@ export function ItemCard({
       {isRow ? (
         <div className="min-w-0 flex-1 text-left">
           <p className={nameCls}>{item.name}</p>
-          <p className={hintCls}>{formatItemStatHint(item)}</p>
+          <p className={hintCls}>
+            {formatItemStatHint(item, statHintInstance)}
+          </p>
         </div>
       ) : (
         <div className="mt-auto w-full min-w-0">
           <p className={nameCls}>{item.name}</p>
-          <p className={hintCls}>{formatItemStatHint(item)}</p>
+          <p className={hintCls}>
+            {formatItemStatHint(item, statHintInstance)}
+          </p>
         </div>
       )}
     </button>

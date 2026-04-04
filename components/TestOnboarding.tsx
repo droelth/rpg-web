@@ -8,6 +8,7 @@ import {
   INITIAL_USER_GOLD,
 } from "@/lib/getOrCreateUser";
 import { persistEffectiveCombatStats } from "@/lib/inventoryUtils";
+import { xpToNextForCurrentLevel } from "@/lib/levelSystem";
 import { DEFAULT_HERO_ID, HERO_CLASSES } from "@/lib/heroClasses";
 import { HeroSlider } from "@/components/HeroSlider";
 import { UsernameInput } from "@/components/UsernameInput";
@@ -44,6 +45,9 @@ export function TestOnboarding({ uid, onSaved }: TestOnboardingProps) {
         username: trimmed,
         class: selectedClass.id,
         stats: selectedClass.stats,
+        level: 1,
+        xp: 0,
+        xpToNext: xpToNextForCurrentLevel(1),
         gold: INITIAL_USER_GOLD,
         energy: INITIAL_USER_ENERGY,
       });

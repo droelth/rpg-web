@@ -1,12 +1,16 @@
 import { doc, getDoc, updateDoc } from "firebase/firestore";
-import type { EquippedState, Item, ItemStats, ItemType } from "@/types/item";
+import type { EquippedState, InventoryInstance, Item, ItemStats, ItemType } from "@/types/item";
 import { EMPTY_EQUIPPED, SLOT_ORDER } from "@/types/item";
 import {
   canonicalItemId,
-  parseInventoryIds,
+  generateInstanceId,
+  inventoryToFirestore,
+  isLegacyInventoryInstanceId,
+  parseInventory,
   resolveItem,
-  STARTER_INVENTORY_IDS,
+  createStarterInventory,
 } from "@/lib/items";
+import { effectiveItemStatsForInstance } from "@/lib/itemRarityStats";
 import { getDb } from "./firebase";
 
 export type CombatTotals = {
@@ -28,16 +32,67 @@ export function parseEquipped(raw: unknown): EquippedState {
   };
 }
 
-/** Normalize equipped slot values to canonical catalog ids. */
-export function normalizeEquippedIds(equipped: EquippedState): EquippedState {
+/** Drop equipped refs that are not present in `inventory`. */
+export function sanitizeEquippedToInventory(
+  equipped: EquippedState,
+  inventory: InventoryInstance[],
+): EquippedState {
+  const ids = new Set(inventory.map((i) => i.instanceId));
   const next: EquippedState = { ...EMPTY_EQUIPPED };
   for (const slot of SLOT_ORDER) {
-    const raw = equipped[slot];
-    if (!raw) continue;
-    const cid = canonicalItemId(raw);
-    if (cid) next[slot] = cid;
+    const v = equipped[slot];
+    next[slot] = v && ids.has(v) ? v : null;
   }
   return next;
+}
+
+/** Resolve equipped slots to catalog items via inventory instances. */
+export function getEquippedItemsFromInventory(
+  equipped: EquippedState,
+  inventory: InventoryInstance[],
+): Item[] {
+  const byId = new Map(inventory.map((i) => [i.instanceId, i]));
+  const out: Item[] = [];
+  for (const slot of SLOT_ORDER) {
+    const iid = equipped[slot];
+    if (!iid) continue;
+    const inst = byId.get(iid);
+    if (!inst) continue;
+    const it = resolveItem(inst.itemId);
+    if (it) out.push(it);
+  }
+  return out;
+}
+
+export function findInventoryInstance(
+  inventory: InventoryInstance[],
+  instanceId: string,
+): InventoryInstance | undefined {
+  return inventory.find((i) => i.instanceId === instanceId);
+}
+
+/**
+ * Equip by instance: sets `equipped[item.type] = instanceId` (replaces whatever was in that slot).
+ */
+export async function equipItem(uid: string, instanceId: string): Promise<void> {
+  const ref = doc(getDb(), "users", uid);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) throw new Error("User not found");
+  const data = snap.data() as Record<string, unknown>;
+  const inventory = parseInventory(data.inventory);
+  const inst = findInventoryInstance(inventory, instanceId);
+  if (!inst) throw new Error("Item instance not in inventory");
+  const item = resolveItem(inst.itemId);
+  if (!item) throw new Error("Unknown item catalog entry");
+  const equipped = sanitizeEquippedToInventory(
+    parseEquipped(data.equipped),
+    inventory,
+  );
+  const next: EquippedState = {
+    ...equipped,
+    [item.type]: instanceId,
+  };
+  await updateDoc(ref, { equipped: next });
 }
 
 export function parseBaseStats(raw: unknown): CombatTotals {
@@ -54,18 +109,6 @@ export function parseBaseStats(raw: unknown): CombatTotals {
   };
 }
 
-/** Resolve equipped slot ids through the item catalog (single source of truth). */
-export function getEquippedItemsFromCatalog(equipped: EquippedState): Item[] {
-  const out: Item[] = [];
-  for (const slot of SLOT_ORDER) {
-    const id = equipped[slot];
-    if (!id) continue;
-    const it = resolveItem(id);
-    if (it) out.push(it);
-  }
-  return out;
-}
-
 function addItemStats(a: CombatTotals, s: ItemStats): CombatTotals {
   return {
     hp: a.hp + (s.hp ?? 0),
@@ -75,28 +118,45 @@ function addItemStats(a: CombatTotals, s: ItemStats): CombatTotals {
   };
 }
 
-/** Base character stats plus all bonuses from equipped items. */
-export function calculateTotalStats(
+/**
+ * Base character stats plus equipped items, using per-instance rarity to scale catalog stats.
+ */
+export function calculateCombatTotalsWithEquippedInventory(
   base: CombatTotals,
-  equippedItems: Item[],
+  equipped: EquippedState,
+  inventory: InventoryInstance[],
 ): CombatTotals {
-  return equippedItems.reduce(
-    (acc, item) => addItemStats(acc, item.stats),
-    { ...base },
-  );
+  const sanitized = sanitizeEquippedToInventory(equipped, inventory);
+  const byId = new Map(inventory.map((i) => [i.instanceId, i]));
+  let acc: CombatTotals = { ...base };
+  for (const slot of SLOT_ORDER) {
+    const iid = sanitized[slot];
+    if (!iid) continue;
+    const inst = byId.get(iid);
+    if (!inst) continue;
+    const it = resolveItem(inst.itemId);
+    if (!it) continue;
+    acc = addItemStats(acc, effectiveItemStatsForInstance(it, inst));
+  }
+  return acc;
 }
 
 /** Shape needed to derive effective combat stats (base + equipped catalog items). */
 export type UserCombatSource = {
   stats: unknown;
   equipped: EquippedState;
+  inventory: InventoryInstance[];
 };
 
-/** Total stats = parseBaseStats + equipped items resolved from `items` catalog. */
+/** Total stats = parseBaseStats + equipped items (catalog stats × instance rarity). */
 export function getEffectiveCombatTotals(user: UserCombatSource): CombatTotals {
   const base = parseBaseStats(user.stats);
-  const equippedItems = getEquippedItemsFromCatalog(user.equipped);
-  return calculateTotalStats(base, equippedItems);
+  const sanitized = sanitizeEquippedToInventory(user.equipped, user.inventory);
+  return calculateCombatTotalsWithEquippedInventory(
+    base,
+    sanitized,
+    user.inventory,
+  );
 }
 
 /** Read `effectiveStats` from Firestore (written by persistEffectiveCombatStats). */
@@ -117,52 +177,158 @@ export async function persistEffectiveCombatStats(uid: string): Promise<CombatTo
   const ref = doc(getDb(), "users", uid);
   const snap = await getDoc(ref);
   if (!snap.exists()) {
-    throw new Error("User document not found");
+    return getEffectiveCombatTotals({
+      stats: null,
+      equipped: { ...EMPTY_EQUIPPED },
+      inventory: [],
+    });
   }
   const data = snap.data() as Record<string, unknown>;
+  const inventory = parseInventory(data.inventory);
+  const equipped = sanitizeEquippedToInventory(
+    parseEquipped(data.equipped),
+    inventory,
+  );
   const totals = getEffectiveCombatTotals({
     stats: data.stats,
-    equipped: parseEquipped(data.equipped),
+    equipped,
+    inventory,
   });
   await updateDoc(ref, { effectiveStats: totals });
   return totals;
 }
 
-/** Current vs totals if `newItem` is equipped in its slot (replaces previous in that slot). */
+/** Current vs totals if `instanceId` is equipped in its item slot (replaces previous in that slot). */
 export function simulateEquip(
   base: CombatTotals,
   equipped: EquippedState,
+  inventory: InventoryInstance[],
+  instanceId: string,
   newItem: Item,
 ): { current: CombatTotals; after: CombatTotals } {
-  const normalized = normalizeEquippedIds(equipped);
-  const currentEquipped = getEquippedItemsFromCatalog(normalized);
-  const current = calculateTotalStats(base, currentEquipped);
+  const sanitized = sanitizeEquippedToInventory(equipped, inventory);
+  const current = calculateCombatTotalsWithEquippedInventory(
+    base,
+    sanitized,
+    inventory,
+  );
 
   const nextEquipped: EquippedState = {
-    ...normalized,
-    [newItem.type]: newItem.id,
+    ...sanitized,
+    [newItem.type]: instanceId,
   };
-  const afterEquipped = getEquippedItemsFromCatalog(nextEquipped);
-  const after = calculateTotalStats(base, afterEquipped);
+  const after = calculateCombatTotalsWithEquippedInventory(
+    base,
+    nextEquipped,
+    inventory,
+  );
 
   return { current, after };
 }
 
-function inventoryNeedsMigration(raw: unknown): boolean {
-  if (!Array.isArray(raw)) return false;
-  return raw.some((x) => x && typeof x === "object");
+/**
+ * Remap equipped after inventory id migration: keep valid instance ids,
+ * map old row instance ids to new ones by index, or treat value as catalog id.
+ */
+function remapEquippedAfterInventoryMigration(
+  oldEquipped: EquippedState,
+  oldInv: InventoryInstance[],
+  newInv: InventoryInstance[],
+): EquippedState {
+  if (oldInv.length !== newInv.length) {
+    return { ...EMPTY_EQUIPPED };
+  }
+  const next: EquippedState = { ...EMPTY_EQUIPPED };
+  const usedRowIdx = new Set<number>();
+
+  for (const slot of SLOT_ORDER) {
+    const v = oldEquipped[slot];
+    if (!v) {
+      next[slot] = null;
+      continue;
+    }
+
+    if (newInv.some((n) => n.instanceId === v)) {
+      next[slot] = v;
+      const idx = oldInv.findIndex((o) => o.instanceId === v);
+      if (idx >= 0) usedRowIdx.add(idx);
+      continue;
+    }
+
+    const idxByOld = oldInv.findIndex((o) => o.instanceId === v);
+    if (idxByOld >= 0) {
+      next[slot] = newInv[idxByOld].instanceId;
+      usedRowIdx.add(idxByOld);
+      continue;
+    }
+
+    let cid = canonicalItemId(v);
+    if (!cid) {
+      const legacy = /^legacy:\d+:(.+)$/.exec(v);
+      if (legacy) cid = canonicalItemId(legacy[1]);
+    }
+    if (!cid) {
+      next[slot] = null;
+      continue;
+    }
+
+    const idx = oldInv.findIndex(
+      (o, i) => o.itemId === cid && !usedRowIdx.has(i),
+    );
+    if (idx >= 0) {
+      usedRowIdx.add(idx);
+      next[slot] = newInv[idx].instanceId;
+    } else {
+      next[slot] = null;
+    }
+  }
+
+  return next;
 }
 
-function inventoryIdsDifferFromRaw(
-  raw: unknown,
-  normalized: string[],
+/** Replace only `legacy:…` synthetic ids; keep existing UUID rows stable. */
+function persistInventoryInstanceIds(inv: InventoryInstance[]): InventoryInstance[] {
+  return inv.map((row) =>
+    isLegacyInventoryInstanceId(row.instanceId)
+      ? {
+          instanceId: generateInstanceId(),
+          itemId: row.itemId,
+          ...(row.rarity ? { rarity: row.rarity } : {}),
+        }
+      : row,
+  );
+}
+
+/** True if inventory rows still use synthetic legacy instance ids. */
+export function inventoryUsesLegacyInstanceIds(
+  inv: InventoryInstance[],
 ): boolean {
-  if (!Array.isArray(raw)) return normalized.length > 0;
-  if (JSON.stringify(raw) === JSON.stringify(normalized)) return false;
-  return true;
+  return inv.some((i) => isLegacyInventoryInstanceId(i.instanceId));
 }
 
-/** Persist default inventory + equipped; migrate legacy object[] inventory to id[]. */
+/** Legacy rows had full item blobs (`name`, `stats`, …), not just ids. */
+function isLegacyInventoryBlob(el: unknown): boolean {
+  if (!el || typeof el !== "object") return false;
+  const o = el as Record<string, unknown>;
+  if (typeof o.instanceId === "string" && typeof o.itemId === "string") {
+    const extra = Object.keys(o).filter((k) => !["instanceId", "itemId", "rarity"].includes(k));
+    return extra.length > 0;
+  }
+  if (typeof o.id === "string") {
+    const allowed = new Set(["id", "rarity"]);
+    return Object.keys(o).some((k) => !allowed.has(k));
+  }
+  return false;
+}
+
+function inventoryNeedsBlobMigration(raw: unknown): boolean {
+  if (!Array.isArray(raw)) return false;
+  return raw.some(isLegacyInventoryBlob);
+}
+
+/**
+ * Persist default inventory + equipped; migrate legacy inventory / assign real instance UUIDs.
+ */
 export async function ensureInventoryDefaults(uid: string): Promise<void> {
   const ref = doc(getDb(), "users", uid);
   const snap = await getDoc(ref);
@@ -170,31 +336,49 @@ export async function ensureInventoryDefaults(uid: string): Promise<void> {
   const d = snap.data();
   const patches: Record<string, unknown> = {};
 
-  const normalizedInv = parseInventoryIds(d.inventory);
-  if (normalizedInv.length === 0) {
-    patches.inventory = [...STARTER_INVENTORY_IDS];
+  let inventory = parseInventory(d.inventory);
+  let equipped = parseEquipped(d.equipped);
+  let writeInv = false;
+  let writeEq = false;
+
+  if (inventory.length === 0) {
+    inventory = createStarterInventory();
+    equipped = { ...EMPTY_EQUIPPED };
+    writeInv = true;
+    writeEq = true;
   } else if (
-    inventoryNeedsMigration(d.inventory) ||
-    inventoryIdsDifferFromRaw(d.inventory, normalizedInv)
+    inventoryUsesLegacyInstanceIds(inventory) ||
+    inventoryNeedsBlobMigration(d.inventory)
   ) {
-    patches.inventory = normalizedInv;
+    const prevInv = inventory;
+    inventory = persistInventoryInstanceIds(prevInv);
+    equipped = remapEquippedAfterInventoryMigration(equipped, prevInv, inventory);
+    writeInv = true;
+    writeEq = true;
+  }
+
+  const afterSanitize = sanitizeEquippedToInventory(equipped, inventory);
+  if (JSON.stringify(afterSanitize) !== JSON.stringify(equipped)) {
+    equipped = afterSanitize;
+    writeEq = true;
   }
 
   const rawEq = d.equipped;
-  const parsedEq = parseEquipped(rawEq);
-  const normalizedEq = normalizeEquippedIds(parsedEq);
+  const needsSlotKeys =
+    !rawEq ||
+    typeof rawEq !== "object" ||
+    !SLOT_ORDER.every((k) => k in (rawEq as Record<string, unknown>));
 
-  if (!rawEq || typeof rawEq !== "object") {
-    patches.equipped = { ...EMPTY_EQUIPPED };
-  } else {
-    const o = rawEq as Record<string, unknown>;
-    const allSlots = SLOT_ORDER.every((k) => k in o);
-    if (!allSlots) {
-      patches.equipped = { ...EMPTY_EQUIPPED, ...normalizedEq };
-    } else if (JSON.stringify(parsedEq) !== JSON.stringify(normalizedEq)) {
-      patches.equipped = normalizedEq;
-    }
+  if (needsSlotKeys) {
+    equipped = sanitizeEquippedToInventory(
+      { ...EMPTY_EQUIPPED, ...equipped },
+      inventory,
+    );
+    writeEq = true;
   }
+
+  if (writeInv) patches.inventory = inventoryToFirestore(inventory);
+  if (writeEq) patches.equipped = equipped;
 
   if (Object.keys(patches).length > 0) {
     await updateDoc(ref, patches);

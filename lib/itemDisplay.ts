@@ -1,28 +1,37 @@
-import type { Item, ItemType } from "@/types/item";
+import type { InventoryInstance, Item, ItemType } from "@/types/item";
+import { effectiveItemStatsForInstance } from "@/lib/itemRarityStats";
 
-export function formatItemStatHint(item: Item): string {
+export function formatItemStatHint(
+  item: Item,
+  instance?: Pick<InventoryInstance, "rarity"> | null,
+): string {
+  const s = effectiveItemStatsForInstance(item, instance);
   const p: string[] = [];
-  if (item.stats.atk) p.push(`+${item.stats.atk} ATK`);
-  if (item.stats.def) p.push(`+${item.stats.def} DEF`);
-  if (item.stats.hp) p.push(`+${item.stats.hp} HP`);
-  if (item.stats.crit) p.push(`+${item.stats.crit} CRIT`);
+  if (s.atk) p.push(`+${s.atk} ATK`);
+  if (s.def) p.push(`+${s.def} DEF`);
+  if (s.hp) p.push(`+${s.hp} HP`);
+  if (s.crit) p.push(`+${s.crit} CRIT`);
   return p.length ? p.join(" · ") : "—";
 }
 
-/** Lines like "+3 ATK" for detail panels. */
-export function describeItemStats(item: Item): string[] {
+/** Lines like "+3 ATK" for detail panels (scaled by instance rarity when provided). */
+export function describeItemStats(
+  item: Item,
+  instance?: Pick<InventoryInstance, "rarity"> | null,
+): string[] {
+  const stats = effectiveItemStatsForInstance(item, instance);
   const lines: string[] = [];
-  if (item.stats.atk != null && item.stats.atk !== 0) {
-    lines.push(`+${item.stats.atk} ATK`);
+  if (stats.atk != null && stats.atk !== 0) {
+    lines.push(`+${stats.atk} ATK`);
   }
-  if (item.stats.def != null && item.stats.def !== 0) {
-    lines.push(`+${item.stats.def} DEF`);
+  if (stats.def != null && stats.def !== 0) {
+    lines.push(`+${stats.def} DEF`);
   }
-  if (item.stats.hp != null && item.stats.hp !== 0) {
-    lines.push(`+${item.stats.hp} HP`);
+  if (stats.hp != null && stats.hp !== 0) {
+    lines.push(`+${stats.hp} HP`);
   }
-  if (item.stats.crit != null && item.stats.crit !== 0) {
-    lines.push(`+${item.stats.crit} CRIT`);
+  if (stats.crit != null && stats.crit !== 0) {
+    lines.push(`+${stats.crit} CRIT`);
   }
   return lines;
 }

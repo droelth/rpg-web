@@ -9,6 +9,9 @@ import { TopBar } from "@/components/TopBar";
 
 export type MainMenuProps = {
   username: string;
+  level: number;
+  xp: number;
+  xpToNext: number;
   gold: number;
   energy: number;
   combatTotals: CombatTotals;
@@ -66,6 +69,20 @@ function ShopIcon() {
   );
 }
 
+function ForgeIcon() {
+  return (
+    <svg className="h-6 w-6" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M5 19h14M8 19l2-8h4l2 8M10 11l1-4h2l1 4M6 7l2-2h8l2 2"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function InventoryIcon() {
   return (
     <svg className="h-6 w-6" viewBox="0 0 24 24" fill="none" aria-hidden>
@@ -107,7 +124,15 @@ function ProfileIcon() {
   );
 }
 
-export function MainMenu({ username, gold, energy, combatTotals }: MainMenuProps) {
+export function MainMenu({
+  username,
+  level,
+  xp,
+  xpToNext,
+  gold,
+  energy,
+  combatTotals,
+}: MainMenuProps) {
   const router = useRouter();
   const energyMax = INITIAL_USER_ENERGY;
   const noop = () => {};
@@ -128,7 +153,9 @@ export function MainMenu({ username, gold, energy, combatTotals }: MainMenuProps
       {/* App column */}
       <div className="relative z-10 flex min-h-dvh w-full max-w-md flex-col">
         <TopBar
-          level={1}
+          level={level}
+          xp={xp}
+          xpToNext={xpToNext}
           username={username}
           gold={gold}
           energy={energy}
@@ -147,25 +174,31 @@ export function MainMenu({ username, gold, energy, combatTotals }: MainMenuProps
             label="PvP"
             theme="pvp"
             icon={<PvpIcon />}
-            onClick={noop}
+            onClick={() => router.push("/pvp")}
           />
           <ActionButton
             label="Dungeon"
             theme="dungeon"
             icon={<DungeonIcon />}
-            onClick={noop}
+            href="/dungeon"
           />
           <ActionButton
             label="Shop"
             theme="shop"
             icon={<ShopIcon />}
-            onClick={noop}
+            href="/shop"
+          />
+          <ActionButton
+            label="Forge"
+            theme="forge"
+            icon={<ForgeIcon />}
+            href="/forge"
           />
           <ActionButton
             label="Inventory"
             theme="inventory"
             icon={<InventoryIcon />}
-            onClick={() => router.push("/inventory")}
+            href="/inventory"
           />
           <ActionButton
             label="Tavern"
@@ -173,12 +206,14 @@ export function MainMenu({ username, gold, energy, combatTotals }: MainMenuProps
             icon={<TavernIcon />}
             onClick={noop}
           />
-          <ActionButton
-            label="Profile"
-            theme="profile"
-            icon={<ProfileIcon />}
-            onClick={noop}
-          />
+          <div className="col-span-2">
+            <ActionButton
+              label="Profile"
+              theme="profile"
+              icon={<ProfileIcon />}
+              href="/profile"
+            />
+          </div>
           <Link
             href="/combat-test"
             className="col-span-2 flex w-full items-center justify-center rounded-2xl border border-cyan-500/30 bg-gradient-to-br from-cyan-700 via-teal-800 to-cyan-950 py-3.5 text-center text-sm font-semibold tracking-wide text-white shadow-lg transition hover:shadow-[0_0_24px_rgba(34,211,238,0.3)] active:scale-[0.98]"

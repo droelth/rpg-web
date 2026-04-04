@@ -65,7 +65,7 @@ export function runCombatStep(state: RunCombatStepState): RunCombatStepResult {
     if (isCrit) logEntries.push("CRITICAL HIT!");
     logEntries.push(`Player hits for ${damage} damage.`);
     if (isDead(nextEnemy)) {
-      logEntries.push("Training Dummy is defeated!");
+      logEntries.push(`${enemy.name} is defeated!`);
       return {
         player,
         enemy: nextEnemy,
