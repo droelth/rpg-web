@@ -32,3 +32,77 @@ export function applyDamage(defender: Fighter, damage: number): void {
 export function isDead(fighter: Fighter): boolean {
   return fighter.currentHp <= 0;
 }
+
+function cloneFighter(f: Fighter): Fighter {
+  return {
+    ...f,
+    stats: { ...f.stats },
+  };
+}
+
+export type CombatTurn = "player" | "enemy";
+
+export type RunCombatStepState = {
+  player: Fighter;
+  enemy: Fighter;
+  turn: CombatTurn;
+};
+
+export type RunCombatStepResult = RunCombatStepState & {
+  winner: CombatTurn | null;
+  logEntries: string[];
+};
+
+/** One turn: damage, logs, death check, turn switch. Pure aside from RNG in calculateDamage. */
+export function runCombatStep(state: RunCombatStepState): RunCombatStepResult {
+  const { player, enemy, turn } = state;
+  const logEntries: string[] = [];
+
+  if (turn === "player") {
+    const { damage, isCrit } = calculateDamage(player, enemy);
+    const nextEnemy = cloneFighter(enemy);
+    applyDamage(nextEnemy, damage);
+    if (isCrit) logEntries.push("CRITICAL HIT!");
+    logEntries.push(`Player hits for ${damage} damage.`);
+    if (isDead(nextEnemy)) {
+      logEntries.push("Training Dummy is defeated!");
+      return {
+        player,
+        enemy: nextEnemy,
+        turn,
+        winner: "player",
+        logEntries,
+      };
+    }
+    return {
+      player,
+      enemy: nextEnemy,
+      turn: "enemy",
+      winner: null,
+      logEntries,
+    };
+  }
+
+  const { damage, isCrit } = calculateDamage(enemy, player);
+  const nextPlayer = cloneFighter(player);
+  applyDamage(nextPlayer, damage);
+  if (isCrit) logEntries.push("CRITICAL HIT!");
+  logEntries.push(`${enemy.name} hits for ${damage} damage.`);
+  if (isDead(nextPlayer)) {
+    logEntries.push("You are defeated!");
+    return {
+      player: nextPlayer,
+      enemy,
+      turn,
+      winner: "enemy",
+      logEntries,
+    };
+  }
+  return {
+    player: nextPlayer,
+    enemy,
+    turn: "player",
+    winner: null,
+    logEntries,
+  };
+}

@@ -1,12 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import {
-  applyDamage,
-  calculateDamage,
   decideFirstTurn,
-  isDead,
+  runCombatStep,
   type Fighter,
   type Stats,
 } from "@/lib/combat";
@@ -36,6 +34,20 @@ export function TestCombatView() {
   const [turn, setTurn] = useState<"player" | "enemy">("player");
   const [log, setLog] = useState<string[]>([]);
   const [winner, setWinner] = useState<"player" | "enemy" | null>(null);
+  const [isRunning, setIsRunning] = useState(false);
+  const [speed, setSpeed] = useState<1 | 2>(1);
+
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const logScrollRef = useRef<HTMLUListElement | null>(null);
+
+  const isFinished = winner !== null;
+
+  const clearCombatTimer = useCallback(() => {
+    if (timerRef.current != null) {
+      clearTimeout(timerRef.current);
+      timerRef.current = null;
+    }
+  }, []);
 
   useEffect(() => {
     if (authLoading) return;
@@ -72,6 +84,7 @@ export function TestCombatView() {
             : "Training Dummy goes first!",
         ]);
         setWinner(null);
+        setIsRunning(true);
       } catch (e) {
         console.error(e);
         if (!cancelled) setLoadError("Could not load your profile.");
@@ -85,45 +98,62 @@ export function TestCombatView() {
     };
   }, [authLoading, authError, user]);
 
-  const nextTurn = useCallback(() => {
-    if (!player || !enemy || winner) return;
+  useEffect(() => {
+    if (!isRunning || isFinished || !player || !enemy) return;
 
-    if (turn === "player") {
-      const { damage, isCrit } = calculateDamage(player, enemy);
-      const nextEnemy = cloneFighter(enemy);
-      applyDamage(nextEnemy, damage);
-      setLog((prev) => {
-        const next = [...prev];
-        if (isCrit) next.push("CRITICAL HIT!");
-        next.push(`Player hits for ${damage} damage.`);
-        return next;
-      });
-      setEnemy(nextEnemy);
-      if (isDead(nextEnemy)) {
-        setWinner("player");
-        setLog((prev) => [...prev, "Training Dummy is defeated!"]);
-        return;
+    const delayMs = 1000 / speed;
+    const id = setTimeout(() => {
+      timerRef.current = null;
+      const step = runCombatStep({ player, enemy, turn });
+      setPlayer(step.player);
+      setEnemy(step.enemy);
+      setTurn(step.turn);
+      setLog((prev) => [...prev, ...step.logEntries]);
+      if (step.winner) {
+        setWinner(step.winner);
+        setIsRunning(false);
       }
-      setTurn("enemy");
-    } else {
-      const { damage, isCrit } = calculateDamage(enemy, player);
-      const nextPlayer = cloneFighter(player);
-      applyDamage(nextPlayer, damage);
-      setLog((prev) => {
-        const next = [...prev];
-        if (isCrit) next.push("CRITICAL HIT!");
-        next.push(`${enemy.name} hits for ${damage} damage.`);
-        return next;
-      });
-      setPlayer(nextPlayer);
-      if (isDead(nextPlayer)) {
-        setWinner("enemy");
-        setLog((prev) => [...prev, "You are defeated!"]);
-        return;
-      }
-      setTurn("player");
+    }, delayMs);
+
+    timerRef.current = id;
+    return () => {
+      clearTimeout(id);
+      if (timerRef.current === id) timerRef.current = null;
+    };
+  }, [isRunning, isFinished, speed, turn, player, enemy]);
+
+  useLayoutEffect(() => {
+    const el = logScrollRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [log]);
+
+  const handleSkip = useCallback(() => {
+    if (!player || !enemy || isFinished) return;
+    clearCombatTimer();
+
+    let p = player;
+    let e = enemy;
+    let t = turn;
+    let w: "player" | "enemy" | null = null;
+    const lines = [...log];
+
+    while (!w) {
+      const step = runCombatStep({ player: p, enemy: e, turn: t });
+      lines.push(...step.logEntries);
+      p = step.player;
+      e = step.enemy;
+      t = step.turn;
+      w = step.winner;
     }
-  }, [player, enemy, turn, winner]);
+
+    setPlayer(p);
+    setEnemy(e);
+    setTurn(t);
+    setLog(lines);
+    setWinner(w);
+    setIsRunning(false);
+  }, [player, enemy, turn, log, isFinished, clearCombatTimer]);
 
   if (authError) {
     return (
@@ -216,7 +246,7 @@ export function TestCombatView() {
       <p className="text-center text-sm text-zinc-400">
         Turn:{" "}
         <span className="font-medium text-zinc-200">
-          {winner
+          {isFinished
             ? "—"
             : turn === "player"
               ? `${player.name}`
@@ -230,22 +260,58 @@ export function TestCombatView() {
         </p>
       ) : null}
 
-      <button
-        type="button"
-        onClick={nextTurn}
-        disabled={!!winner}
-        className="rounded-xl bg-amber-600 px-4 py-3 text-sm font-semibold text-zinc-950 transition hover:bg-amber-500 disabled:cursor-not-allowed disabled:opacity-40"
-      >
-        Next Turn
-      </button>
+      <div className="flex flex-wrap items-center justify-center gap-2">
+        <div className="flex rounded-xl border border-zinc-700 bg-zinc-900/60 p-0.5">
+          <button
+            type="button"
+            disabled={isFinished}
+            onClick={() => setSpeed(1)}
+            className={[
+              "rounded-lg px-3 py-2 text-xs font-semibold transition",
+              speed === 1
+                ? "bg-amber-600 text-zinc-950"
+                : "text-zinc-400 hover:text-zinc-200",
+            ].join(" ")}
+          >
+            1x
+          </button>
+          <button
+            type="button"
+            disabled={isFinished}
+            onClick={() => setSpeed(2)}
+            className={[
+              "rounded-lg px-3 py-2 text-xs font-semibold transition",
+              speed === 2
+                ? "bg-amber-600 text-zinc-950"
+                : "text-zinc-400 hover:text-zinc-200",
+            ].join(" ")}
+          >
+            2x
+          </button>
+        </div>
+        <button
+          type="button"
+          onClick={handleSkip}
+          disabled={isFinished}
+          className="rounded-xl border border-zinc-600 bg-zinc-800 px-4 py-2 text-sm font-semibold text-zinc-100 transition hover:bg-zinc-700 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Skip
+        </button>
+      </div>
 
       <div className="flex min-h-0 flex-1 flex-col">
         <p className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500">
           Log
         </p>
-        <ul className="max-h-64 overflow-y-auto rounded-lg border border-zinc-800 bg-black/40 p-3 text-sm text-zinc-300">
+        <ul
+          ref={logScrollRef}
+          className="max-h-64 overflow-y-auto rounded-lg border border-zinc-800 bg-black/40 p-3 text-sm text-zinc-300"
+        >
           {log.map((line, i) => (
-            <li key={i} className="border-b border-zinc-800/80 py-1.5 last:border-0">
+            <li
+              key={i}
+              className="border-b border-zinc-800/80 py-1.5 last:border-0"
+            >
               {line}
             </li>
           ))}
