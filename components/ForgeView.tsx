@@ -7,7 +7,11 @@ import {
   ensureInventoryDefaults,
   persistEffectiveCombatStats,
 } from "@/lib/inventoryUtils";
-import { validateForgeSelection } from "@/lib/forgeSystem";
+import {
+  forgeDestroyChanceForRarity,
+  forgeGoldCostForRarity,
+  validateForgeSelection,
+} from "@/lib/forgeSystem";
 import { ForgeError, transactionForgeMerge } from "@/lib/forgeFirestore";
 import { resolveInventoryEntries } from "@/lib/items";
 import { ItemCard } from "@/components/ItemCard";
@@ -20,6 +24,10 @@ export function ForgeView() {
   const [userDoc, setUserDoc] = useState<UserDocument | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [forging, setForging] = useState(false);
+  const [forgeNotice, setForgeNotice] = useState<{
+    tone: "ok" | "bad";
+    text: string;
+  } | null>(null);
 
   const refresh = useCallback(async (uid: string) => {
     await getOrCreateUser(uid);
@@ -63,7 +71,16 @@ export function ForgeView() {
     return validateForgeSelection(userDoc.inventory, selectedIds);
   }, [userDoc, selectedIds]);
 
-  const canForge = forgeCheck.ok;
+  const forgeCost =
+    forgeCheck.ok ? forgeGoldCostForRarity(forgeCheck.sourceRarity) : 0;
+  const destroyChancePct =
+    forgeCheck.ok
+      ? Math.round(forgeDestroyChanceForRarity(forgeCheck.sourceRarity) * 100)
+      : 0;
+  const canForge =
+    forgeCheck.ok &&
+    userDoc != null &&
+    userDoc.gold >= forgeCost;
 
   function toggleInstance(instanceId: string) {
     setSelectedIds((prev) => {
@@ -79,11 +96,23 @@ export function ForgeView() {
     if (!user || !canForge || forging) return;
     setForging(true);
     setErr(null);
+    setForgeNotice(null);
     try {
-      await transactionForgeMerge(user.uid, selectedIds);
+      const { outcome } = await transactionForgeMerge(user.uid, selectedIds);
       await persistEffectiveCombatStats(user.uid);
       await refresh(user.uid);
       setSelectedIds([]);
+      setForgeNotice(
+        outcome === "upgraded"
+          ? {
+              tone: "ok",
+              text: "Forge succeeded — you received a higher rarity item.",
+            }
+          : {
+              tone: "bad",
+              text: "Forge failed — all three items were lost. Gold was still spent.",
+            },
+      );
     } catch (e) {
       console.error(e);
       if (e instanceof ForgeError) {
@@ -153,11 +182,31 @@ export function ForgeView() {
 
         <p className="mb-4 text-center text-sm text-zinc-400 sm:text-left">
           Select three identical items (same item and rarity) to merge into one
-          of the next tier. Max three selections.
+          of the next tier. Each attempt costs gold by rarity; there is a chance
+          the forge fails and you lose all three materials (no upgraded item).
         </p>
+
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-white/10 bg-zinc-900/40 px-4 py-2.5 text-sm">
+          <span className="text-zinc-500">Your gold</span>
+          <span className="font-mono tabular-nums text-amber-200">
+            {userDoc.gold}
+          </span>
+        </div>
 
         {err ? (
           <p className="mb-4 text-center text-sm text-red-400">{err}</p>
+        ) : null}
+
+        {forgeNotice ? (
+          <p
+            className={`mb-4 rounded-xl border px-4 py-3 text-center text-sm ${
+              forgeNotice.tone === "ok"
+                ? "border-emerald-500/35 bg-emerald-950/25 text-emerald-200/95"
+                : "border-rose-500/35 bg-rose-950/25 text-rose-200/95"
+            }`}
+          >
+            {forgeNotice.text}
+          </p>
         ) : null}
 
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/10 bg-zinc-900/50 px-4 py-3">
@@ -168,16 +217,34 @@ export function ForgeView() {
             </span>
             /3
           </p>
-          {selectedIds.length === 3 && !canForge ? (
+          {selectedIds.length === 3 && !forgeCheck.ok ? (
             <p className="text-xs text-amber-400/90">{forgeCheck.reason}</p>
           ) : null}
           {forgeCheck.ok ? (
-            <p className="text-xs text-emerald-400/90">
-              Forges to{" "}
-              <span className="font-semibold capitalize">
-                {forgeCheck.nextRarity}
-              </span>
-            </p>
+            <div className="flex flex-col items-end gap-1 text-right text-xs sm:flex-row sm:items-center sm:gap-3">
+              <p className="text-zinc-400">
+                Cost{" "}
+                <span className="font-mono font-semibold text-amber-200">
+                  {forgeCost}
+                </span>{" "}
+                gold
+                {userDoc.gold < forgeCost ? (
+                  <span className="ml-1 text-rose-400">(not enough)</span>
+                ) : null}
+              </p>
+              <p className="text-zinc-400">
+                Fail risk{" "}
+                <span className="font-semibold text-rose-300/90">
+                  {destroyChancePct}%
+                </span>
+              </p>
+              <p className="text-emerald-400/90">
+                →{" "}
+                <span className="font-semibold capitalize">
+                  {forgeCheck.nextRarity}
+                </span>
+              </p>
+            </div>
           ) : null}
         </div>
 
@@ -216,12 +283,19 @@ export function ForgeView() {
             onClick={handleForge}
             className="w-full max-w-sm rounded-xl bg-gradient-to-r from-orange-600 to-amber-600 px-6 py-3.5 text-sm font-semibold text-white shadow-lg shadow-orange-900/40 transition hover:from-orange-500 hover:to-amber-500 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {forging ? "Forging…" : "Forge"}
+            {forging
+              ? "Forging…"
+              : forgeCheck.ok
+                ? `Forge (${forgeCost} gold)`
+                : "Forge"}
           </button>
           <button
             type="button"
             disabled={forging || selectedIds.length === 0}
-            onClick={() => setSelectedIds([])}
+            onClick={() => {
+              setSelectedIds([]);
+              setForgeNotice(null);
+            }}
             className="text-xs text-zinc-500 underline decoration-zinc-600 underline-offset-2 hover:text-zinc-400 disabled:opacity-40"
           >
             Clear selection

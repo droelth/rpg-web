@@ -1,6 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import { AnimatedCombatPortrait } from "@/components/combat/AnimatedCombatPortrait";
+import { AnimatedHpBar } from "@/components/combat/AnimatedHpBar";
+import { CombatAnimatedLog } from "@/components/combat/CombatAnimatedLog";
 import { CombatantPortrait } from "@/components/CombatantPortrait";
 import {
   useCallback,
@@ -12,9 +15,15 @@ import {
 import {
   decideFirstTurn,
   runCombatStep,
+  type CombatAnimationCue,
   type Fighter,
   type Stats,
 } from "@/lib/combat";
+import {
+  appendCombatLogLines,
+  initialCombatLogLines,
+  type CombatLogLine,
+} from "@/lib/combatLog";
 import { getInventoryPortraitPath } from "@/lib/classPortrait";
 import { MAX_ENERGY } from "@/lib/energySystem";
 import { getOrCreateUser, type UserDocument } from "@/lib/getOrCreateUser";
@@ -100,7 +109,9 @@ export function PvpView() {
   const [player, setPlayer] = useState<Fighter | null>(null);
   const [enemy, setEnemy] = useState<Fighter | null>(null);
   const [turn, setTurn] = useState<"player" | "enemy">("player");
-  const [log, setLog] = useState<string[]>([]);
+  const [log, setLog] = useState<CombatLogLine[]>([]);
+  const [strikeSeq, setStrikeSeq] = useState(0);
+  const [lastCue, setLastCue] = useState<CombatAnimationCue | null>(null);
   const [winner, setWinner] = useState<"player" | "enemy" | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const [rewards, setRewards] = useState<PvpRewardBreakdown | null>(null);
@@ -183,10 +194,12 @@ export function PvpView() {
     const id = setTimeout(() => {
       timerRef.current = null;
       const step = runCombatStep({ player, enemy, turn });
+      setStrikeSeq((n) => n + 1);
+      setLastCue(step.animationCue);
       setPlayer(step.player);
       setEnemy(step.enemy);
       setTurn(step.turn);
-      setLog((prev) => [...prev, ...step.logEntries]);
+      setLog((prev) => appendCombatLogLines(prev, step.logEntries));
       if (step.winner && opponent) {
         finalizeCombat(step.winner, opponent, playerLevelAtMatch);
       }
@@ -264,11 +277,15 @@ export function PvpView() {
       setEnemy(e);
       const first = decideFirstTurn();
       setTurn(first);
-      setLog([
-        first === "player"
-          ? "You take the first turn!"
-          : `${e.name} moves first!`,
-      ]);
+      setStrikeSeq(0);
+      setLastCue(null);
+      setLog(
+        initialCombatLogLines([
+          first === "player"
+            ? "You take the first turn!"
+            : `${e.name} moves first!`,
+        ]),
+      );
       setWinner(null);
       setRewards(null);
       setPhase("battle");
@@ -292,6 +309,8 @@ export function PvpView() {
     setPlayer(null);
     setEnemy(null);
     setLog([]);
+    setStrikeSeq(0);
+    setLastCue(null);
     setWinner(null);
     setRewards(null);
     setIsRunning(false);
@@ -469,9 +488,13 @@ export function PvpView() {
             <VersusNames left={player.name} right={enemy.name} />
             <div className="grid grid-cols-2 gap-3">
               <div className="flex flex-col gap-2">
-                <CombatantPortrait
+                <AnimatedCombatPortrait
                   src={getInventoryPortraitPath(userDoc.class)}
                   alt={player.name}
+                  layoutSide="left"
+                  role="player"
+                  strikeSeq={strikeSeq}
+                  lastCue={lastCue}
                 />
                 <div className="rounded-xl border border-emerald-500/20 bg-black/30 p-3">
                   <p className="text-[10px] uppercase text-zinc-500">You</p>
@@ -481,12 +504,23 @@ export function PvpView() {
                     currentHp={player.currentHp}
                     hpAccentClass="text-emerald-300"
                   />
+                  <AnimatedHpBar
+                    fraction={
+                      player.stats.hp > 0 ? player.currentHp / player.stats.hp : 0
+                    }
+                    colorClass="bg-emerald-600"
+                    className="mt-2 h-1.5 overflow-hidden rounded-full bg-zinc-800/90"
+                  />
                 </div>
               </div>
               <div className="flex flex-col gap-2">
-                <CombatantPortrait
+                <AnimatedCombatPortrait
                   src={getInventoryPortraitPath(opponent?.class)}
                   alt={enemy.name}
+                  layoutSide="right"
+                  role="enemy"
+                  strikeSeq={strikeSeq}
+                  lastCue={lastCue}
                 />
                 <div className="rounded-xl border border-rose-500/20 bg-black/30 p-3">
                   <p className="text-[10px] uppercase text-zinc-500">Opponent</p>
@@ -496,17 +530,22 @@ export function PvpView() {
                     currentHp={enemy.currentHp}
                     hpAccentClass="text-rose-300"
                   />
+                  <AnimatedHpBar
+                    fraction={
+                      enemy.stats.hp > 0 ? enemy.currentHp / enemy.stats.hp : 0
+                    }
+                    colorClass="bg-rose-600"
+                    className="mt-2 h-1.5 overflow-hidden rounded-full bg-zinc-800/90"
+                  />
                 </div>
               </div>
             </div>
-            <ul
+            <CombatAnimatedLog
               ref={logScrollRef}
+              entries={log}
               className="max-h-52 overflow-y-auto rounded-xl border border-white/10 bg-black/40 p-3 text-sm text-zinc-300"
-            >
-              {log.map((line, i) => (
-                <li key={`${i}-${line.slice(0, 12)}`}>{line}</li>
-              ))}
-            </ul>
+              itemClassName="border-b border-white/5 py-1.5 last:border-0"
+            />
           </div>
         ) : null}
 

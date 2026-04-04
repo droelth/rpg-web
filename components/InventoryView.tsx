@@ -3,7 +3,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { doc, updateDoc } from "firebase/firestore";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import type { EquippedState, Item, ItemType } from "@/types/item";
 import { SLOT_ORDER } from "@/types/item";
 import { getInventoryPortraitPath } from "@/lib/classPortrait";
@@ -26,6 +26,7 @@ import {
   canUserEquipItem,
   resolveInventoryEntries,
   resolveItem,
+  sortInventoryRowsBySlotOrder,
 } from "@/lib/items";
 import { EmptyEquipSlot, ItemCard } from "@/components/ItemCard";
 import { useAuth } from "@/hooks/useAuth";
@@ -175,11 +176,18 @@ export function InventoryView() {
     [userDoc],
   );
 
+  const { sortedInventoryRows, sortedIndexByInstanceId } = useMemo(() => {
+    const sorted = sortInventoryRowsBySlotOrder(inventoryRows);
+    const m = new Map<string, number>();
+    sorted.forEach((r, i) => m.set(r.instance.instanceId, i));
+    return { sortedInventoryRows: sorted, sortedIndexByInstanceId: m };
+  }, [inventoryRows]);
+
   const selectedRow =
     selectedInvIndex !== null &&
     selectedInvIndex >= 0 &&
-    selectedInvIndex < inventoryRows.length
-      ? inventoryRows[selectedInvIndex]
+    selectedInvIndex < sortedInventoryRows.length
+      ? sortedInventoryRows[selectedInvIndex]
       : null;
   const selected = selectedRow?.item ?? null;
 
@@ -399,7 +407,7 @@ export function InventoryView() {
               {SLOT_ORDER.map((slot) => {
                 const iid = userDoc.equipped[slot];
                 const equippedRow = iid
-                  ? inventoryRows.find((r) => r.instance.instanceId === iid)
+                  ? sortedInventoryRows.find((r) => r.instance.instanceId === iid)
                   : undefined;
                 const it = equippedRow?.item ?? slotItem(slot);
                 return (
@@ -420,10 +428,8 @@ export function InventoryView() {
                         disabled={saving}
                         onClick={() => {
                           if (!iid) return;
-                          const idx = inventoryRows.findIndex(
-                            (r) => r.instance.instanceId === iid,
-                          );
-                          setSelectedInvIndex(idx >= 0 ? idx : null);
+                          const idx = sortedIndexByInstanceId.get(iid);
+                          setSelectedInvIndex(idx !== undefined ? idx : null);
                         }}
                         className="w-full"
                       />
@@ -447,19 +453,43 @@ export function InventoryView() {
             </p>
             <div className="flex justify-center sm:justify-start">
               <div className="grid w-full max-w-3xl grid-cols-3 gap-3 sm:grid-cols-4 sm:gap-4 justify-items-center">
-                {inventoryRows.map((row, i) => (
-                  <ItemCard
-                    key={`inv-${i}`}
-                    item={row.item}
-                    displayRarity={row.displayRarity}
-                    size="md"
-                    layout="stack"
-                    selected={selectedInvIndex === i}
-                    disabled={saving}
-                    onClick={() => setSelectedInvIndex(i)}
-                    className="mx-auto w-full max-w-[168px]"
-                  />
-                ))}
+                {SLOT_ORDER.map((slot) => {
+                  const rowsForSlot = sortedInventoryRows.filter(
+                    (r) => r.item.type === slot,
+                  );
+                  if (rowsForSlot.length === 0) return null;
+
+                  return (
+                    <Fragment key={slot}>
+                      <div className="col-span-3 mt-1 border-t border-white/5 pt-3 sm:col-span-4 [&:first-child]:mt-0 [&:first-child]:border-t-0 [&:first-child]:pt-0">
+                        <p className="w-full text-left text-[10px] font-semibold uppercase tracking-[0.2em] text-zinc-500">
+                          {SLOT_LABEL[slot]}
+                          <span className="ml-2 font-normal normal-case tracking-normal text-zinc-600">
+                            ({rowsForSlot.length})
+                          </span>
+                        </p>
+                      </div>
+                      {rowsForSlot.map((row) => {
+                        const i = sortedIndexByInstanceId.get(
+                          row.instance.instanceId,
+                        )!;
+                        return (
+                          <ItemCard
+                            key={row.instance.instanceId}
+                            item={row.item}
+                            displayRarity={row.displayRarity}
+                            size="md"
+                            layout="stack"
+                            selected={selectedInvIndex === i}
+                            disabled={saving}
+                            onClick={() => setSelectedInvIndex(i)}
+                            className="mx-auto w-full max-w-[168px]"
+                          />
+                        );
+                      })}
+                    </Fragment>
+                  );
+                })}
               </div>
             </div>
 

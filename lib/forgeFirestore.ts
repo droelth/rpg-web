@@ -8,13 +8,28 @@ import {
 } from "@/lib/items";
 import { getDb } from "./firebase";
 import { parseEquipped } from "./inventoryUtils";
-import { validateForgeSelection } from "./forgeSystem";
+import {
+  forgeAttemptSucceeds,
+  forgeGoldCostForRarity,
+  forgeOutcomeRoll,
+  validateForgeSelection,
+} from "./forgeSystem";
 
 export class ForgeError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "ForgeError";
   }
+}
+
+export type ForgeMergeOutcome = "upgraded" | "shattered";
+
+function readGold(data: Record<string, unknown>): number {
+  const g = data.gold;
+  if (typeof g === "number" && Number.isFinite(g)) {
+    return Math.max(0, Math.floor(g));
+  }
+  return 0;
 }
 
 function clearEquippedIfConsumed(
@@ -30,15 +45,18 @@ function clearEquippedIfConsumed(
 }
 
 /**
- * Atomically removes three matching instances and adds one upgraded instance.
- * Clears equipped slots that referenced any consumed instance.
+ * Atomically charges forge gold, removes three matching instances, then either
+ * adds one upgraded item (success) or nothing (shatter). Clears equipped slots
+ * for consumed instances. Roll is deterministic per read so transaction retries match.
  */
 export async function transactionForgeMerge(
   uid: string,
   selectedInstanceIds: string[],
-): Promise<void> {
+): Promise<{ outcome: ForgeMergeOutcome }> {
   const db = getDb();
   const ref = doc(db, "users", uid);
+
+  let outcome: ForgeMergeOutcome = "upgraded";
 
   await runTransaction(db, async (transaction) => {
     const snap = await transaction.get(ref);
@@ -52,16 +70,30 @@ export async function transactionForgeMerge(
       throw new ForgeError(validation.reason);
     }
 
-    const { instances, nextRarity } = validation;
+    const { instances, nextRarity, sourceRarity } = validation;
     const itemId = instances[0]!.itemId;
     const remove = new Set(selectedInstanceIds);
 
+    const cost = forgeGoldCostForRarity(sourceRarity);
+    const prevGold = readGold(data);
+    if (prevGold < cost) {
+      throw new ForgeError("Not enough gold to forge.");
+    }
+
+    const roll = forgeOutcomeRoll(uid, selectedInstanceIds, prevGold);
+    const succeed = forgeAttemptSucceeds(roll, sourceRarity);
+    outcome = succeed ? "upgraded" : "shattered";
+
+    const nextGold = prevGold - cost;
     const nextInventory = inventory.filter((i) => !remove.has(i.instanceId));
-    nextInventory.push({
-      instanceId: generateInstanceId(),
-      itemId,
-      rarity: nextRarity,
-    });
+
+    if (succeed) {
+      nextInventory.push({
+        instanceId: generateInstanceId(),
+        itemId,
+        rarity: nextRarity,
+      });
+    }
 
     const equipped = parseEquipped(data.equipped);
     const nextEquipped = clearEquippedIfConsumed(equipped, remove);
@@ -69,6 +101,9 @@ export async function transactionForgeMerge(
     transaction.update(ref, {
       inventory: inventoryToFirestore(nextInventory),
       equipped: nextEquipped,
+      gold: nextGold,
     });
   });
+
+  return { outcome };
 }

@@ -48,9 +48,17 @@ export type RunCombatStepState = {
   turn: CombatTurn;
 };
 
+/** One combat strike for UI (attack lunge, hit shake, crit flair). */
+export type CombatAnimationCue = {
+  attacker: CombatTurn;
+  damage: number;
+  isCrit: boolean;
+};
+
 export type RunCombatStepResult = RunCombatStepState & {
   winner: CombatTurn | null;
   logEntries: string[];
+  animationCue: CombatAnimationCue;
 };
 
 /** One turn: damage, logs, death check, turn switch. Pure aside from RNG in calculateDamage. */
@@ -62,6 +70,11 @@ export function runCombatStep(state: RunCombatStepState): RunCombatStepResult {
     const { damage, isCrit } = calculateDamage(player, enemy);
     const nextEnemy = cloneFighter(enemy);
     applyDamage(nextEnemy, damage);
+    const animationCue: CombatAnimationCue = {
+      attacker: "player",
+      damage,
+      isCrit,
+    };
     if (isCrit) logEntries.push("CRITICAL HIT!");
     logEntries.push(`Player hits for ${damage} damage.`);
     if (isDead(nextEnemy)) {
@@ -72,6 +85,7 @@ export function runCombatStep(state: RunCombatStepState): RunCombatStepResult {
         turn,
         winner: "player",
         logEntries,
+        animationCue,
       };
     }
     return {
@@ -80,12 +94,18 @@ export function runCombatStep(state: RunCombatStepState): RunCombatStepResult {
       turn: "enemy",
       winner: null,
       logEntries,
+      animationCue,
     };
   }
 
   const { damage, isCrit } = calculateDamage(enemy, player);
   const nextPlayer = cloneFighter(player);
   applyDamage(nextPlayer, damage);
+  const animationCue: CombatAnimationCue = {
+    attacker: "enemy",
+    damage,
+    isCrit,
+  };
   if (isCrit) logEntries.push("CRITICAL HIT!");
   logEntries.push(`${enemy.name} hits for ${damage} damage.`);
   if (isDead(nextPlayer)) {
@@ -96,6 +116,7 @@ export function runCombatStep(state: RunCombatStepState): RunCombatStepResult {
       turn,
       winner: "enemy",
       logEntries,
+      animationCue,
     };
   }
   return {
@@ -104,5 +125,6 @@ export function runCombatStep(state: RunCombatStepState): RunCombatStepResult {
     turn: "player",
     winner: null,
     logEntries,
+    animationCue,
   };
 }

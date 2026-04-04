@@ -2,12 +2,19 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { AnimatedHpBar } from "@/components/combat/AnimatedHpBar";
+import { CombatAnimatedLog } from "@/components/combat/CombatAnimatedLog";
 import {
   decideFirstTurn,
   runCombatStep,
   type Fighter,
   type Stats,
 } from "@/lib/combat";
+import {
+  appendCombatLogLines,
+  initialCombatLogLines,
+  type CombatLogLine,
+} from "@/lib/combatLog";
 import { getOrCreateUser } from "@/lib/getOrCreateUser";
 import { ensureInventoryDefaults } from "@/lib/inventoryUtils";
 import { persistCombatProgression } from "@/lib/levelSystem";
@@ -33,7 +40,7 @@ export function TestCombatView() {
   const [player, setPlayer] = useState<Fighter | null>(null);
   const [enemy, setEnemy] = useState<Fighter | null>(null);
   const [turn, setTurn] = useState<"player" | "enemy">("player");
-  const [log, setLog] = useState<string[]>([]);
+  const [log, setLog] = useState<CombatLogLine[]>([]);
   const [winner, setWinner] = useState<"player" | "enemy" | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const [speed, setSpeed] = useState<1 | 2>(1);
@@ -123,11 +130,13 @@ export function TestCombatView() {
         setPlayer(p);
         setEnemy(e);
         setTurn(first);
-        setLog([
-          first === "player"
-            ? "Player goes first!"
-            : "Training Dummy goes first!",
-        ]);
+        setLog(
+          initialCombatLogLines([
+            first === "player"
+              ? "Player goes first!"
+              : "Training Dummy goes first!",
+          ]),
+        );
         setWinner(null);
         setIsRunning(true);
       } catch (e) {
@@ -153,7 +162,7 @@ export function TestCombatView() {
       setPlayer(step.player);
       setEnemy(step.enemy);
       setTurn(step.turn);
-      setLog((prev) => [...prev, ...step.logEntries]);
+      setLog((prev) => appendCombatLogLines(prev, step.logEntries));
       if (step.winner) {
         finalizeCombat(step.winner);
       }
@@ -164,7 +173,7 @@ export function TestCombatView() {
       clearTimeout(id);
       if (timerRef.current === id) timerRef.current = null;
     };
-  }, [isRunning, isFinished, speed, turn, player, enemy]);
+  }, [isRunning, isFinished, speed, turn, player, enemy, finalizeCombat]);
 
   useLayoutEffect(() => {
     const el = logScrollRef.current;
@@ -180,11 +189,11 @@ export function TestCombatView() {
     let e = enemy;
     let t = turn;
     let w: "player" | "enemy" | null = null;
-    const lines = [...log];
+    const newTexts: string[] = [];
 
     while (!w) {
       const step = runCombatStep({ player: p, enemy: e, turn: t });
-      lines.push(...step.logEntries);
+      newTexts.push(...step.logEntries);
       p = step.player;
       e = step.enemy;
       t = step.turn;
@@ -194,9 +203,9 @@ export function TestCombatView() {
     setPlayer(p);
     setEnemy(e);
     setTurn(t);
-    setLog(lines);
+    setLog((prev) => appendCombatLogLines(prev, newTexts));
     finalizeCombat(w);
-  }, [player, enemy, turn, log, isFinished, clearCombatTimer, finalizeCombat]);
+  }, [player, enemy, turn, isFinished, clearCombatTimer, finalizeCombat]);
 
   if (authError) {
     return (
@@ -283,14 +292,13 @@ export function TestCombatView() {
             {player.currentHp} / {player.stats.hp} HP
           </span>
         </div>
-        <div className="mt-1 h-2 overflow-hidden rounded-full bg-zinc-800">
-          <div
-            className="h-full rounded-full bg-emerald-600 transition-[width]"
-            style={{
-              width: `${Math.max(0, (player.currentHp / player.stats.hp) * 100)}%`,
-            }}
-          />
-        </div>
+        <AnimatedHpBar
+          fraction={
+            player.stats.hp > 0 ? player.currentHp / player.stats.hp : 0
+          }
+          colorClass="bg-emerald-600"
+          className="mt-1 h-2 overflow-hidden rounded-full bg-zinc-800"
+        />
       </div>
 
       <div className="rounded-xl border border-zinc-800 bg-zinc-900/80 p-4">
@@ -300,14 +308,11 @@ export function TestCombatView() {
             {enemy.currentHp} / {enemy.stats.hp} HP
           </span>
         </div>
-        <div className="mt-1 h-2 overflow-hidden rounded-full bg-zinc-800">
-          <div
-            className="h-full rounded-full bg-rose-600 transition-[width]"
-            style={{
-              width: `${Math.max(0, (enemy.currentHp / enemy.stats.hp) * 100)}%`,
-            }}
-          />
-        </div>
+        <AnimatedHpBar
+          fraction={enemy.stats.hp > 0 ? enemy.currentHp / enemy.stats.hp : 0}
+          colorClass="bg-rose-600"
+          className="mt-1 h-2 overflow-hidden rounded-full bg-zinc-800"
+        />
       </div>
 
       <p className="text-center text-sm text-zinc-400">
@@ -370,19 +375,11 @@ export function TestCombatView() {
         <p className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500">
           Log
         </p>
-        <ul
+        <CombatAnimatedLog
           ref={logScrollRef}
+          entries={log}
           className="max-h-64 overflow-y-auto rounded-lg border border-zinc-800 bg-black/40 p-3 text-sm text-zinc-300"
-        >
-          {log.map((line, i) => (
-            <li
-              key={i}
-              className="border-b border-zinc-800/80 py-1.5 last:border-0"
-            >
-              {line}
-            </li>
-          ))}
-        </ul>
+        />
       </div>
     </div>
   );

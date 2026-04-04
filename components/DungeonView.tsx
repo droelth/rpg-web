@@ -2,13 +2,21 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { CombatantPortrait } from "@/components/CombatantPortrait";
+import { AnimatedCombatPortrait } from "@/components/combat/AnimatedCombatPortrait";
+import { AnimatedHpBar } from "@/components/combat/AnimatedHpBar";
+import { CombatAnimatedLog } from "@/components/combat/CombatAnimatedLog";
 import {
   decideFirstTurn,
   runCombatStep,
+  type CombatAnimationCue,
   type Fighter,
   type Stats,
 } from "@/lib/combat";
+import {
+  appendCombatLogLines,
+  initialCombatLogLines,
+  type CombatLogLine,
+} from "@/lib/combatLog";
 import type { DungeonDefinition } from "@/lib/dungeons";
 import { DUNGEONS } from "@/lib/dungeons";
 import { persistDungeonClaim } from "@/lib/dungeonFirestore";
@@ -61,7 +69,9 @@ export function DungeonView() {
   const [player, setPlayer] = useState<Fighter | null>(null);
   const [enemy, setEnemy] = useState<Fighter | null>(null);
   const [turn, setTurn] = useState<"player" | "enemy">("player");
-  const [log, setLog] = useState<string[]>([]);
+  const [log, setLog] = useState<CombatLogLine[]>([]);
+  const [strikeSeq, setStrikeSeq] = useState(0);
+  const [lastCue, setLastCue] = useState<CombatAnimationCue | null>(null);
   const [winner, setWinner] = useState<"player" | "enemy" | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const [speed, setSpeed] = useState<1 | 2>(1);
@@ -165,10 +175,14 @@ export function DungeonView() {
       setPlayer(p);
       setEnemy(e);
       setTurn(first);
-      setLog([
-        `Entering ${dungeon.name}…`,
-        first === "player" ? "You take the first turn!" : `${e.name} moves first!`,
-      ]);
+      setStrikeSeq(0);
+      setLastCue(null);
+      setLog(
+        initialCombatLogLines([
+          `Entering ${dungeon.name}…`,
+          first === "player" ? "You take the first turn!" : `${e.name} moves first!`,
+        ]),
+      );
       setPhase("combat");
       setIsRunning(true);
     },
@@ -209,14 +223,17 @@ export function DungeonView() {
       setEnemy(nextEnemy);
       setWinner(null);
       setTurn(first);
-      setLog((prev) => [
-        ...prev,
-        `Stage ${s + 1} cleared!`,
-        `--- Stage ${next + 1} ---`,
-        first === "player"
-          ? "You take the first turn!"
-          : `${nextEnemy.name} moves first!`,
-      ]);
+      setStrikeSeq(0);
+      setLastCue(null);
+      setLog((prev) =>
+        appendCombatLogLines(prev, [
+          `Stage ${s + 1} cleared!`,
+          `--- Stage ${next + 1} ---`,
+          first === "player"
+            ? "You take the first turn!"
+            : `${nextEnemy.name} moves first!`,
+        ]),
+      );
       setIsRunning(true);
     },
     [],
@@ -237,7 +254,9 @@ export function DungeonView() {
       timerRef.current = null;
       const step = runCombatStep({ player, enemy, turn });
 
-      setLog((prev) => [...prev, ...step.logEntries]);
+      setStrikeSeq((n) => n + 1);
+      setLastCue(step.animationCue);
+      setLog((prev) => appendCombatLogLines(prev, step.logEntries));
       setPlayer(step.player);
       setEnemy(step.enemy);
       setTurn(step.turn);
@@ -278,18 +297,19 @@ export function DungeonView() {
     let e = enemy;
     let t = turn;
     let w: "player" | "enemy" | null = null;
-    const lines = [...log];
+    const newTexts: string[] = [];
 
     while (!w) {
       const step = runCombatStep({ player: p, enemy: e, turn: t });
-      lines.push(...step.logEntries);
+      newTexts.push(...step.logEntries);
       p = step.player;
       e = step.enemy;
       t = step.turn;
       w = step.winner;
     }
 
-    setLog(lines);
+    setLog((prev) => appendCombatLogLines(prev, newTexts));
+    setLastCue(null);
     setPlayer(p);
     setEnemy(e);
     setTurn(t);
@@ -305,7 +325,6 @@ export function DungeonView() {
     player,
     enemy,
     turn,
-    log,
     isFinished,
     phase,
     clearCombatTimer,
@@ -321,6 +340,8 @@ export function DungeonView() {
     setEnemy(null);
     setWinner(null);
     setLog([]);
+    setStrikeSeq(0);
+    setLastCue(null);
     setPendingReward(null);
     setClaimError(null);
     setPhase("select");
@@ -482,9 +503,13 @@ export function DungeonView() {
 
               <div className="grid grid-cols-2 gap-3">
                 <div className="flex flex-col gap-2">
-                  <CombatantPortrait
+                  <AnimatedCombatPortrait
                     src={getInventoryPortraitPath(profile?.class)}
                     alt={player.name}
+                    layoutSide="left"
+                    role="player"
+                    strikeSeq={strikeSeq}
+                    lastCue={lastCue}
                   />
                   <div className="rounded-xl border border-zinc-800 bg-zinc-900/80 p-3">
                     <div className="flex justify-between text-xs sm:text-sm">
@@ -493,20 +518,20 @@ export function DungeonView() {
                         {player.currentHp} / {player.stats.hp}
                       </span>
                     </div>
-                    <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-zinc-800">
-                      <div
-                        className="h-full rounded-full bg-emerald-600 transition-[width]"
-                        style={{
-                          width: `${Math.max(0, (player.currentHp / player.stats.hp) * 100)}%`,
-                        }}
-                      />
-                    </div>
+                    <AnimatedHpBar
+                      fraction={player.stats.hp > 0 ? player.currentHp / player.stats.hp : 0}
+                      colorClass="bg-emerald-600"
+                    />
                   </div>
                 </div>
                 <div className="flex flex-col gap-2">
-                  <CombatantPortrait
+                  <AnimatedCombatPortrait
                     src={getMobPortraitPath(activeMobType)}
                     alt={enemy.name}
+                    layoutSide="right"
+                    role="enemy"
+                    strikeSeq={strikeSeq}
+                    lastCue={lastCue}
                   />
                   <div className="rounded-xl border border-zinc-800 bg-zinc-900/80 p-3">
                     <div className="flex justify-between text-xs sm:text-sm">
@@ -515,14 +540,10 @@ export function DungeonView() {
                         {enemy.currentHp} / {enemy.stats.hp}
                       </span>
                     </div>
-                    <div className="mt-1.5 h-2 overflow-hidden rounded-full bg-zinc-800">
-                      <div
-                        className="h-full rounded-full bg-rose-600 transition-[width]"
-                        style={{
-                          width: `${Math.max(0, (enemy.currentHp / enemy.stats.hp) * 100)}%`,
-                        }}
-                      />
-                    </div>
+                    <AnimatedHpBar
+                      fraction={enemy.stats.hp > 0 ? enemy.currentHp / enemy.stats.hp : 0}
+                      colorClass="bg-rose-600"
+                    />
                   </div>
                 </div>
               </div>
@@ -581,19 +602,7 @@ export function DungeonView() {
                 <p className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500">
                   Log
                 </p>
-                <ul
-                  ref={logScrollRef}
-                  className="max-h-56 overflow-y-auto rounded-lg border border-zinc-800 bg-black/40 p-3 text-sm text-zinc-300"
-                >
-                  {log.map((line, i) => (
-                    <li
-                      key={i}
-                      className="border-b border-zinc-800/80 py-1.5 last:border-0"
-                    >
-                      {line}
-                    </li>
-                  ))}
-                </ul>
+                <CombatAnimatedLog ref={logScrollRef} entries={log} />
               </div>
             </>
           )}

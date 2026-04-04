@@ -22,8 +22,43 @@ export function nextForgeRarity(current: ItemRarity): ItemRarity | null {
   return RARITY_FORGE_ORDER[i + 1]!;
 }
 
+/** Gold charged per forge attempt (paid even if the forge fails). */
+export const FORGE_GOLD_COST: Record<ItemRarity, number> = {
+  common: 30,
+  uncommon: 90,
+  rare: 240,
+  epic: 600,
+  legendary: 0,
+};
+
+/**
+ * Chance (0–1) that the forge destroys all three inputs with no upgraded item.
+ * Success = keep cost paid, consume three, receive one next-tier item.
+ */
+export const FORGE_DESTROY_CHANCE: Record<ItemRarity, number> = {
+  common: 0.18,
+  uncommon: 0.24,
+  rare: 0.32,
+  epic: 0.42,
+  legendary: 0,
+};
+
+export function forgeGoldCostForRarity(rarity: ItemRarity): number {
+  return FORGE_GOLD_COST[rarity] ?? 0;
+}
+
+/** Probability the forge fails and items are lost (no output). */
+export function forgeDestroyChanceForRarity(rarity: ItemRarity): number {
+  return FORGE_DESTROY_CHANCE[rarity] ?? 0;
+}
+
 export type ForgeValidation =
-  | { ok: true; instances: InventoryInstance[]; nextRarity: ItemRarity }
+  | {
+      ok: true;
+      instances: InventoryInstance[];
+      nextRarity: ItemRarity;
+      sourceRarity: ItemRarity;
+    }
   | { ok: false; reason: string };
 
 /**
@@ -81,5 +116,33 @@ export function validateForgeSelection(
     return { ok: false, reason: "Cannot upgrade this rarity." };
   }
 
-  return { ok: true, instances, nextRarity: nextR };
+  return { ok: true, instances, nextRarity: nextR, sourceRarity: r0 };
+}
+
+/**
+ * Deterministic roll in [0, 1) for forge outcome so Firestore transaction retries
+ * stay consistent. Uses uid, sorted instance ids, and a salt from current gold.
+ */
+export function forgeOutcomeRoll(
+  uid: string,
+  selectedInstanceIds: string[],
+  goldSalt: number,
+): number {
+  const sorted = [...selectedInstanceIds].sort().join(",");
+  const str = `${uid}\0${sorted}\0${goldSalt}`;
+  let h = 2166136261 >>> 0;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return (h % 1_000_000) / 1_000_000;
+}
+
+/** True = upgraded item created; false = all three items destroyed, no output. */
+export function forgeAttemptSucceeds(
+  roll01: number,
+  sourceRarity: ItemRarity,
+): boolean {
+  const pDestroy = forgeDestroyChanceForRarity(sourceRarity);
+  return roll01 >= pDestroy;
 }

@@ -387,6 +387,26 @@ export function resolveInventoryEntries(
     .filter((x): x is ResolvedInventoryRow => x != null);
 }
 
+const SLOT_TYPE_SORT_INDEX = new Map<ItemType, number>(
+  SLOT_ORDER.map((t, i) => [t, i]),
+);
+
+/**
+ * Inventory UI order: weapon → armor → helmet → ring, then name, then instance id.
+ */
+export function sortInventoryRowsBySlotOrder(
+  rows: ResolvedInventoryRow[],
+): ResolvedInventoryRow[] {
+  return [...rows].sort((a, b) => {
+    const oa = SLOT_TYPE_SORT_INDEX.get(a.item.type) ?? 99;
+    const ob = SLOT_TYPE_SORT_INDEX.get(b.item.type) ?? 99;
+    if (oa !== ob) return oa - ob;
+    const byName = a.item.name.localeCompare(b.item.name);
+    if (byName !== 0) return byName;
+    return a.instance.instanceId.localeCompare(b.instance.instanceId);
+  });
+}
+
 /** All catalog entries (for shop fallbacks by type). */
 export function allCatalogItems(): Item[] {
   return Object.values(items);
