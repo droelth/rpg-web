@@ -6,17 +6,25 @@ import { doc, updateDoc } from "firebase/firestore";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { EquippedState, Item, ItemType } from "@/types/item";
 import { SLOT_ORDER } from "@/types/item";
+import { getInventoryPortraitPath } from "@/lib/classPortrait";
 import { getDb } from "@/lib/firebase";
 import { getOrCreateUser, type UserDocument } from "@/lib/getOrCreateUser";
+import type { CombatTotals } from "@/lib/inventoryUtils";
 import {
   calculateTotalStats,
   ensureInventoryDefaults,
-  formatStatDelta,
-  getEquippedItems,
+  getEquippedItemsFromCatalog,
   parseBaseStats,
   persistEffectiveCombatStats,
   simulateEquip,
 } from "@/lib/inventoryUtils";
+import { describeItemStats } from "@/lib/itemDisplay";
+import {
+  getItemRarity,
+  rarityLabelClass,
+} from "@/lib/itemRarityStyles";
+import { canonicalItemId, resolveInventory, resolveItem } from "@/lib/items";
+import { EmptyEquipSlot, ItemCard } from "@/components/ItemCard";
 import { useAuth } from "@/hooks/useAuth";
 
 const SLOT_LABEL: Record<ItemType, string> = {
@@ -34,8 +42,8 @@ function StatBlock({
   totals: { hp: number; atk: number; def: number; crit: number };
 }) {
   return (
-    <div className="rounded-lg border border-white/10 bg-black/30 px-3 py-2">
-      <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+    <div className="rounded-xl border border-white/10 bg-gradient-to-br from-zinc-900/70 via-black/50 to-black/70 px-4 py-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] backdrop-blur-md">
+      <p className="mb-2 text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
         {title}
       </p>
       <dl className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs text-zinc-200">
@@ -52,13 +60,68 @@ function StatBlock({
   );
 }
 
-function itemStatHint(item: Item): string {
-  const p: string[] = [];
-  if (item.stats.atk) p.push(`ATK +${item.stats.atk}`);
-  if (item.stats.def) p.push(`DEF +${item.stats.def}`);
-  if (item.stats.hp) p.push(`HP +${item.stats.hp}`);
-  if (item.stats.crit) p.push(`CRIT +${item.stats.crit}`);
-  return p.length ? p.join(" · ") : "—";
+const PREVIEW_STAT_ROWS: { key: keyof CombatTotals; label: string }[] = [
+  { key: "atk", label: "ATK" },
+  { key: "def", label: "DEF" },
+  { key: "hp", label: "HP" },
+  { key: "crit", label: "CRIT" },
+];
+
+function StatEquipPreview({
+  current,
+  after,
+}: {
+  current: CombatTotals;
+  after: CombatTotals;
+}) {
+  return (
+    <div className="mt-5 space-y-3 border-t border-white/10 pt-5">
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+        Stat preview
+      </p>
+      <div className="space-y-4">
+        {PREVIEW_STAT_ROWS.map(({ key, label }) => {
+          const before = current[key];
+          const next = after[key];
+          const delta = next - before;
+          const deltaCls =
+            delta > 0
+              ? "text-emerald-400"
+              : delta < 0
+                ? "text-red-400"
+                : "text-zinc-500";
+          const deltaStr =
+            delta === 0 ? "(±0)" : `(${delta > 0 ? "+" : ""}${delta})`;
+          return (
+            <div
+              key={key}
+              className="rounded-lg border border-white/5 bg-black/25 px-3 py-2.5 backdrop-blur-sm"
+            >
+              <p className="text-[10px] font-medium uppercase tracking-wide text-zinc-500">
+                Current
+              </p>
+              <p className="mt-0.5 font-mono text-sm text-zinc-200">
+                {label}: {before}
+              </p>
+              <p className="mt-2 text-[10px] font-medium uppercase tracking-wide text-zinc-500">
+                After equip
+              </p>
+              <p className="mt-0.5 font-mono text-sm text-zinc-100">
+                {label}: {next}{" "}
+                <span className={`text-xs font-semibold ${deltaCls}`}>
+                  {deltaStr}
+                </span>
+              </p>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function rarityDisplayName(rarity: string): string {
+  return rarity.charAt(0).toUpperCase() + rarity.slice(1);
 }
 
 export function InventoryView() {
@@ -105,19 +168,16 @@ export function InventoryView() {
 
   const preview = useMemo(() => {
     if (!userDoc || !base || !selected) return null;
-    return simulateEquip(
-      base,
-      userDoc.equipped,
-      userDoc.inventory,
-      selected,
-    );
+    return simulateEquip(base, userDoc.equipped, selected);
   }, [userDoc, base, selected]);
 
+  const inventoryItems = useMemo(
+    () => (userDoc ? resolveInventory(userDoc.inventory) : []),
+    [userDoc],
+  );
+
   const equippedItems = useMemo(
-    () =>
-      userDoc
-        ? getEquippedItems(userDoc.inventory, userDoc.equipped)
-        : [],
+    () => (userDoc ? getEquippedItemsFromCatalog(userDoc.equipped) : []),
     [userDoc],
   );
 
@@ -126,13 +186,29 @@ export function InventoryView() {
     [base, equippedItems],
   );
 
+  const selectedStatLines = useMemo(
+    () => (selected ? describeItemStats(selected) : []),
+    [selected],
+  );
+
+  const portraitSrc = useMemo(
+    () => (userDoc ? getInventoryPortraitPath(userDoc.class) : "/images/inventory-hero.png"),
+    [userDoc],
+  );
+
+  const equippedIdForSelectedSlot =
+    selected && userDoc ? userDoc.equipped[selected.type] : null;
   const isSelectedEquipped =
-    selected && userDoc
-      ? userDoc.equipped[selected.type] === selected.id
-      : false;
+    equippedIdForSelectedSlot != null &&
+    selected != null &&
+    canonicalItemId(equippedIdForSelectedSlot) === selected.id;
 
   async function handleEquip() {
     if (!user || !userDoc || !selected || saving) return;
+    if (!userDoc.inventory.includes(selected.id)) {
+      setErr("Item is not in your inventory.");
+      return;
+    }
     setSaving(true);
     setErr(null);
     try {
@@ -175,7 +251,7 @@ export function InventoryView() {
     if (!userDoc) return;
     const id = userDoc.equipped[slot];
     if (!id) return;
-    return userDoc.inventory.find((i) => i.id === id);
+    return resolveItem(id);
   }
 
   if (authError) {
@@ -256,7 +332,8 @@ export function InventoryView() {
           <section className="flex w-full flex-col items-center lg:max-w-sm lg:shrink-0">
             <div className="relative mb-5 aspect-[3/4] w-full max-w-[220px] overflow-hidden rounded-2xl border border-white/10 bg-black/40 shadow-[0_0_40px_rgba(139,92,246,0.15)] ring-1 ring-violet-500/20 backdrop-blur-sm">
               <Image
-                src="/images/inventory-hero.png"
+                key={portraitSrc}
+                src={portraitSrc}
                 alt=""
                 fill
                 className="object-cover object-top"
@@ -269,30 +346,35 @@ export function InventoryView() {
                 aria-hidden
               />
             </div>
-            <div className="w-full space-y-2">
+            <div className="w-full space-y-2.5">
               <p className="text-center text-xs font-medium uppercase tracking-widest text-zinc-500">
                 Equipped
               </p>
               {SLOT_ORDER.map((slot) => {
                 const it = slotItem(slot);
                 return (
-                  <button
-                    key={slot}
-                    type="button"
-                    disabled={saving}
-                    onClick={() => {
-                      if (it) setSelected(it);
-                      else setSelected(null);
-                    }}
-                    className="flex w-full items-center justify-between rounded-xl border border-white/10 bg-white/5 px-3 py-2.5 text-left shadow-inner backdrop-blur-md transition hover:border-violet-400/30 hover:bg-white/[0.08] hover:shadow-[0_0_20px_rgba(139,92,246,0.12)] disabled:opacity-50"
-                  >
-                    <span className="text-xs text-zinc-500">
+                  <div key={slot} className="space-y-1">
+                    <p className="px-0.5 text-[10px] font-medium uppercase tracking-wider text-zinc-600">
                       {SLOT_LABEL[slot]}
-                    </span>
-                    <span className="max-w-[60%] truncate text-sm font-medium text-zinc-200">
-                      {it ? it.name : "— Empty —"}
-                    </span>
-                  </button>
+                    </p>
+                    {it ? (
+                      <ItemCard
+                        item={it}
+                        size="sm"
+                        layout="row"
+                        selected={selected?.id === it.id}
+                        disabled={saving}
+                        onClick={() => setSelected(it)}
+                        className="w-full"
+                      />
+                    ) : (
+                      <EmptyEquipSlot
+                        slotLabel={SLOT_LABEL[slot]}
+                        disabled={saving}
+                        onClick={() => setSelected(null)}
+                      />
+                    )}
+                  </div>
                 );
               })}
             </div>
@@ -300,111 +382,61 @@ export function InventoryView() {
 
           {/* Right: grid + panel */}
           <section className="min-w-0 flex-1 space-y-4">
-            <p className="text-xs font-medium uppercase tracking-widest text-zinc-500">
+            <p className="text-center text-xs font-medium uppercase tracking-widest text-zinc-500 sm:text-left">
               Items
             </p>
-            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-4">
-              {userDoc.inventory.map((item) => {
-                const active = selected?.id === item.id;
-                return (
-                  <button
+            <div className="flex justify-center sm:justify-start">
+              <div className="grid w-full max-w-3xl grid-cols-3 gap-3 sm:grid-cols-4 sm:gap-4 justify-items-center">
+                {inventoryItems.map((item) => (
+                  <ItemCard
                     key={item.id}
-                    type="button"
+                    item={item}
+                    size="md"
+                    layout="stack"
+                    selected={selected?.id === item.id}
                     disabled={saving}
                     onClick={() => setSelected(item)}
-                    className={[
-                      "rounded-xl border px-3 py-3 text-left transition",
-                      "bg-white/5 backdrop-blur-md hover:border-violet-400/35 hover:shadow-[0_0_18px_rgba(139,92,246,0.15)]",
-                      active
-                        ? "border-violet-400/50 shadow-[0_0_24px_rgba(139,92,246,0.2)]"
-                        : "border-white/10",
-                    ].join(" ")}
-                  >
-                    <span className="line-clamp-2 text-sm font-medium text-zinc-100">
-                      {item.name}
-                    </span>
-                    <span className="mt-1 block text-[10px] text-zinc-500">
-                      {itemStatHint(item)}
-                    </span>
-                  </button>
-                );
-              })}
+                    className="mx-auto w-full max-w-[168px]"
+                  />
+                ))}
+              </div>
             </div>
 
             {/* Selected panel */}
-            <div className="rounded-2xl border border-white/10 bg-black/35 p-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)] backdrop-blur-md">
+            <div className="rounded-2xl border border-white/10 bg-gradient-to-b from-zinc-900/85 via-zinc-950/90 to-black/80 p-5 shadow-[0_0_48px_rgba(0,0,0,0.45),inset_0_1px_0_rgba(255,255,255,0.06)] backdrop-blur-xl">
               {selected ? (
                 <>
-                  <h2 className="text-base font-semibold text-zinc-50">
+                  <h2 className="text-xl font-bold tracking-tight text-zinc-50">
                     {selected.name}
                   </h2>
-                  <p className="mt-0.5 text-xs capitalize text-violet-300/80">
+                  <p
+                    className={`mt-1 text-sm font-semibold ${rarityLabelClass[getItemRarity(selected)]}`}
+                  >
+                    {rarityDisplayName(getItemRarity(selected))}
+                  </p>
+                  <p className="mt-0.5 text-xs capitalize text-violet-300/70">
                     {selected.type}
                   </p>
-                  <ul className="mt-3 space-y-1 text-sm text-zinc-300">
-                    {selected.stats.atk != null ? (
-                      <li>ATK +{selected.stats.atk}</li>
-                    ) : null}
-                    {selected.stats.def != null ? (
-                      <li>DEF +{selected.stats.def}</li>
-                    ) : null}
-                    {selected.stats.hp != null ? (
-                      <li>HP +{selected.stats.hp}</li>
-                    ) : null}
-                    {selected.stats.crit != null ? (
-                      <li>CRIT +{selected.stats.crit}</li>
-                    ) : null}
-                    {!selected.stats.atk &&
-                    !selected.stats.def &&
-                    !selected.stats.hp &&
-                    !selected.stats.crit ? (
+                  <ul className="mt-4 space-y-1.5 border-t border-white/10 pt-4 text-sm text-zinc-200">
+                    {selectedStatLines.length ? (
+                      selectedStatLines.map((line) => (
+                        <li key={line} className="font-mono text-[13px]">
+                          {line}
+                        </li>
+                      ))
+                    ) : (
                       <li className="text-zinc-500">No stat bonuses</li>
-                    ) : null}
+                    )}
                   </ul>
 
                   {preview ? (
-                    <div className="mt-4 space-y-3 border-t border-white/10 pt-4">
-                      <StatBlock title="Current stats" totals={preview.current} />
-                      <StatBlock title="After equip" totals={preview.after} />
-                      <div className="flex flex-wrap gap-2 text-[11px] text-zinc-400">
-                        <span>
-                          HP{" "}
-                          <span className="font-mono text-amber-200/90">
-                            {formatStatDelta(preview.current.hp, preview.after.hp)}
-                          </span>
-                        </span>
-                        <span>
-                          ATK{" "}
-                          <span className="font-mono text-amber-200/90">
-                            {formatStatDelta(
-                              preview.current.atk,
-                              preview.after.atk,
-                            )}
-                          </span>
-                        </span>
-                        <span>
-                          DEF{" "}
-                          <span className="font-mono text-amber-200/90">
-                            {formatStatDelta(
-                              preview.current.def,
-                              preview.after.def,
-                            )}
-                          </span>
-                        </span>
-                        <span>
-                          CRIT{" "}
-                          <span className="font-mono text-amber-200/90">
-                            {formatStatDelta(
-                              preview.current.crit,
-                              preview.after.crit,
-                            )}
-                          </span>
-                        </span>
-                      </div>
-                    </div>
+                    <StatEquipPreview
+                      current={preview.current}
+                      after={preview.after}
+                    />
                   ) : null}
 
-                  <div className="mt-4 flex flex-wrap gap-2">
+                  <div className="mt-5 flex flex-wrap gap-2">
                     {!isSelectedEquipped ? (
                       <button
                         type="button"

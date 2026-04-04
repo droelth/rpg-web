@@ -1,5 +1,7 @@
 export type ItemType = "weapon" | "armor" | "helmet" | "ring";
 
+export type ItemRarity = "common" | "uncommon" | "rare" | "epic" | "legendary";
+
 export type ItemStats = {
   atk?: number;
   def?: number;
@@ -12,6 +14,8 @@ export type Item = {
   name: string;
   type: ItemType;
   stats: ItemStats;
+  /** Visual tier; stored only in the item catalog, not in Firebase. */
+  rarity: ItemRarity;
 };
 
 export type EquippedState = {

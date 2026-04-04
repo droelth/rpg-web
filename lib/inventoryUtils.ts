@@ -1,13 +1,13 @@
 import { doc, getDoc, updateDoc } from "firebase/firestore";
 import type { EquippedState, Item, ItemStats, ItemType } from "@/types/item";
 import { EMPTY_EQUIPPED, SLOT_ORDER } from "@/types/item";
+import {
+  canonicalItemId,
+  parseInventoryIds,
+  resolveItem,
+  STARTER_INVENTORY_IDS,
+} from "@/lib/items";
 import { getDb } from "./firebase";
-
-/** Starter gear when Firestore has no inventory. */
-export const STARTER_ITEMS: Item[] = [
-  { id: "sword_1", name: "Iron Sword", type: "weapon", stats: { atk: 3 } },
-  { id: "armor_1", name: "Leather Armor", type: "armor", stats: { def: 2 } },
-];
 
 export type CombatTotals = {
   hp: number;
@@ -15,39 +15,6 @@ export type CombatTotals = {
   def: number;
   crit: number;
 };
-
-function parseItemStats(raw: unknown): ItemStats {
-  if (!raw || typeof raw !== "object") return {};
-  const s = raw as Record<string, unknown>;
-  const n = (v: unknown) => (typeof v === "number" ? v : undefined);
-  return {
-    atk: n(s.atk),
-    def: n(s.def),
-    hp: n(s.hp),
-    crit: n(s.crit),
-  };
-}
-
-export function parseItem(raw: unknown): Item | null {
-  if (!raw || typeof raw !== "object") return null;
-  const o = raw as Record<string, unknown>;
-  if (typeof o.id !== "string" || typeof o.name !== "string") return null;
-  const t = o.type;
-  if (t !== "weapon" && t !== "armor" && t !== "helmet" && t !== "ring") {
-    return null;
-  }
-  return {
-    id: o.id,
-    name: o.name,
-    type: t,
-    stats: parseItemStats(o.stats),
-  };
-}
-
-export function parseInventory(raw: unknown): Item[] {
-  if (!Array.isArray(raw)) return [];
-  return raw.map(parseItem).filter((x): x is Item => x != null);
-}
 
 export function parseEquipped(raw: unknown): EquippedState {
   if (!raw || typeof raw !== "object") return { ...EMPTY_EQUIPPED };
@@ -59,6 +26,18 @@ export function parseEquipped(raw: unknown): EquippedState {
     helmet: id(e.helmet),
     ring: id(e.ring),
   };
+}
+
+/** Normalize equipped slot values to canonical catalog ids. */
+export function normalizeEquippedIds(equipped: EquippedState): EquippedState {
+  const next: EquippedState = { ...EMPTY_EQUIPPED };
+  for (const slot of SLOT_ORDER) {
+    const raw = equipped[slot];
+    if (!raw) continue;
+    const cid = canonicalItemId(raw);
+    if (cid) next[slot] = cid;
+  }
+  return next;
 }
 
 export function parseBaseStats(raw: unknown): CombatTotals {
@@ -75,17 +54,13 @@ export function parseBaseStats(raw: unknown): CombatTotals {
   };
 }
 
-/** Items currently equipped (one per slot, in slot order). */
-export function getEquippedItems(
-  allItems: Item[],
-  equipped: EquippedState,
-): Item[] {
-  const byId = new Map(allItems.map((i) => [i.id, i]));
+/** Resolve equipped slot ids through the item catalog (single source of truth). */
+export function getEquippedItemsFromCatalog(equipped: EquippedState): Item[] {
   const out: Item[] = [];
   for (const slot of SLOT_ORDER) {
     const id = equipped[slot];
     if (!id) continue;
-    const it = byId.get(id);
+    const it = resolveItem(id);
     if (it) out.push(it);
   }
   return out;
@@ -111,18 +86,17 @@ export function calculateTotalStats(
   );
 }
 
-/** Shape needed to derive effective combat stats (base + gear). Firestore `stats` stays unchanged. */
+/** Shape needed to derive effective combat stats (base + equipped catalog items). */
 export type UserCombatSource = {
   stats: unknown;
-  inventory: Item[];
   equipped: EquippedState;
 };
 
-/** Total stats = parseBaseStats(user.stats) + all equipped item bonuses. */
+/** Total stats = parseBaseStats + equipped items resolved from `items` catalog. */
 export function getEffectiveCombatTotals(user: UserCombatSource): CombatTotals {
   const base = parseBaseStats(user.stats);
-  const equipped = getEquippedItems(user.inventory, user.equipped);
-  return calculateTotalStats(base, equipped);
+  const equippedItems = getEquippedItemsFromCatalog(user.equipped);
+  return calculateTotalStats(base, equippedItems);
 }
 
 /** Read `effectiveStats` from Firestore (written by persistEffectiveCombatStats). */
@@ -138,7 +112,7 @@ export function parseStoredEffectiveStats(raw: unknown): CombatTotals | null {
   return { hp, atk, def, crit };
 }
 
-/** Recompute from base + inventory + equipped and save `effectiveStats` on the user doc. */
+/** Recompute from base + equipped and save `effectiveStats` on the user doc. */
 export async function persistEffectiveCombatStats(uid: string): Promise<CombatTotals> {
   const ref = doc(getDb(), "users", uid);
   const snap = await getDoc(ref);
@@ -148,34 +122,47 @@ export async function persistEffectiveCombatStats(uid: string): Promise<CombatTo
   const data = snap.data() as Record<string, unknown>;
   const totals = getEffectiveCombatTotals({
     stats: data.stats,
-    inventory: parseInventory(data.inventory),
     equipped: parseEquipped(data.equipped),
   });
   await updateDoc(ref, { effectiveStats: totals });
   return totals;
 }
 
-/** Current totals vs totals if `newItem` is placed in its type slot (replacing previous). */
+/** Current vs totals if `newItem` is equipped in its slot (replaces previous in that slot). */
 export function simulateEquip(
   base: CombatTotals,
   equipped: EquippedState,
-  allItems: Item[],
   newItem: Item,
 ): { current: CombatTotals; after: CombatTotals } {
-  const currentEquipped = getEquippedItems(allItems, equipped);
+  const normalized = normalizeEquippedIds(equipped);
+  const currentEquipped = getEquippedItemsFromCatalog(normalized);
   const current = calculateTotalStats(base, currentEquipped);
 
   const nextEquipped: EquippedState = {
-    ...equipped,
+    ...normalized,
     [newItem.type]: newItem.id,
   };
-  const afterEquipped = getEquippedItems(allItems, nextEquipped);
+  const afterEquipped = getEquippedItemsFromCatalog(nextEquipped);
   const after = calculateTotalStats(base, afterEquipped);
 
   return { current, after };
 }
 
-/** Persist default inventory + equipped shape when missing or empty. */
+function inventoryNeedsMigration(raw: unknown): boolean {
+  if (!Array.isArray(raw)) return false;
+  return raw.some((x) => x && typeof x === "object");
+}
+
+function inventoryIdsDifferFromRaw(
+  raw: unknown,
+  normalized: string[],
+): boolean {
+  if (!Array.isArray(raw)) return normalized.length > 0;
+  if (JSON.stringify(raw) === JSON.stringify(normalized)) return false;
+  return true;
+}
+
+/** Persist default inventory + equipped; migrate legacy object[] inventory to id[]. */
 export async function ensureInventoryDefaults(uid: string): Promise<void> {
   const ref = doc(getDb(), "users", uid);
   const snap = await getDoc(ref);
@@ -183,19 +170,29 @@ export async function ensureInventoryDefaults(uid: string): Promise<void> {
   const d = snap.data();
   const patches: Record<string, unknown> = {};
 
-  const inv = parseInventory(d.inventory);
-  if (inv.length === 0) {
-    patches.inventory = STARTER_ITEMS;
+  const normalizedInv = parseInventoryIds(d.inventory);
+  if (normalizedInv.length === 0) {
+    patches.inventory = [...STARTER_INVENTORY_IDS];
+  } else if (
+    inventoryNeedsMigration(d.inventory) ||
+    inventoryIdsDifferFromRaw(d.inventory, normalizedInv)
+  ) {
+    patches.inventory = normalizedInv;
   }
 
   const rawEq = d.equipped;
+  const parsedEq = parseEquipped(rawEq);
+  const normalizedEq = normalizeEquippedIds(parsedEq);
+
   if (!rawEq || typeof rawEq !== "object") {
     patches.equipped = { ...EMPTY_EQUIPPED };
   } else {
     const o = rawEq as Record<string, unknown>;
     const allSlots = SLOT_ORDER.every((k) => k in o);
     if (!allSlots) {
-      patches.equipped = { ...EMPTY_EQUIPPED, ...parseEquipped(rawEq) };
+      patches.equipped = { ...EMPTY_EQUIPPED, ...normalizedEq };
+    } else if (JSON.stringify(parsedEq) !== JSON.stringify(normalizedEq)) {
+      patches.equipped = normalizedEq;
     }
   }
 
