@@ -76,8 +76,6 @@ export default function Home() {
       username={userDoc.username}
       gold={userDoc.gold}
       energy={userDoc.energy}
-      classId={userDoc.class}
-      stats={userDoc.stats}
     />
   );
 }

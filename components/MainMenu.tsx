@@ -1,9 +1,7 @@
 "use client";
 
-import Image from "next/image";
-import { useMemo } from "react";
+import Link from "next/link";
 import { INITIAL_USER_ENERGY } from "@/lib/getOrCreateUser";
-import { HERO_CLASSES } from "@/lib/heroClasses";
 import { ActionButton } from "@/components/ActionButton";
 import { TopBar } from "@/components/TopBar";
 
@@ -11,26 +9,7 @@ export type MainMenuProps = {
   username: string;
   gold: number;
   energy: number;
-  classId: string | null;
-  stats: unknown;
 };
-
-function parseCombatStats(stats: unknown): {
-  hp: number;
-  atk: number;
-  def: number;
-  crit: number;
-} | null {
-  if (!stats || typeof stats !== "object") return null;
-  const s = stats as Record<string, unknown>;
-  const num = (v: unknown) => (typeof v === "number" ? v : null);
-  const hp = num(s.hp);
-  const atk = num(s.atk);
-  const def = num(s.def);
-  const crit = num(s.crit);
-  if (hp == null || atk == null || def == null || crit == null) return null;
-  return { hp, atk, def, crit };
-}
 
 function PvpIcon() {
   return (
@@ -125,20 +104,8 @@ function ProfileIcon() {
   );
 }
 
-export function MainMenu({
-  username,
-  gold,
-  energy,
-  classId,
-  stats,
-}: MainMenuProps) {
+export function MainMenu({ username, gold, energy }: MainMenuProps) {
   const energyMax = INITIAL_USER_ENERGY;
-  const classLabel = useMemo(() => {
-    if (!classId) return "Adventurer";
-    return HERO_CLASSES.find((c) => c.id === classId)?.name ?? classId;
-  }, [classId]);
-  const combat = useMemo(() => parseCombatStats(stats), [stats]);
-
   const noop = () => {};
 
   return (
@@ -155,7 +122,7 @@ export function MainMenu({
       />
 
       {/* App column */}
-      <div className="relative z-10 flex w-full max-w-md flex-col">
+      <div className="relative z-10 flex min-h-dvh w-full max-w-md flex-col">
         <TopBar
           level={1}
           username={username}
@@ -164,39 +131,11 @@ export function MainMenu({
           energyMax={energyMax}
         />
 
-        {/* Character */}
-        <div className="relative flex min-h-0 flex-1 flex-col items-center justify-center px-6 py-4">
-          <p className="mb-3 text-center text-xs font-medium uppercase tracking-[0.2em] text-zinc-500">
-            {classLabel}
-          </p>
-          <div className="relative aspect-[3/4] w-[min(72vw,16rem)] max-w-full">
-            <div
-              className="absolute inset-0 rounded-3xl shadow-[0_0_0_1px_rgba(255,255,255,0.08),inset_0_0_60px_rgba(0,0,0,0.75),0_20px_50px_rgba(0,0,0,0.6)] ring-1 ring-white/10"
-              aria-hidden
-            />
-            <div className="relative h-full w-full overflow-hidden rounded-3xl">
-              <Image
-                src="/images/hero.png"
-                alt=""
-                fill
-                className="object-cover object-top"
-                sizes="256px"
-                priority
-                unoptimized
-              />
-            </div>
-          </div>
-          {combat ? (
-            <p className="mt-4 text-center text-[11px] font-medium tabular-nums tracking-wide text-zinc-400">
-              HP {combat.hp} · ATK {combat.atk} · DEF {combat.def} · CRIT{" "}
-              {combat.crit}%
-            </p>
-          ) : null}
-        </div>
+        <div className="min-h-4 flex-1" aria-hidden />
 
         {/* Actions */}
         <nav
-          className="grid shrink-0 grid-cols-2 gap-3 px-4 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-2"
+          className="grid shrink-0 grid-cols-2 gap-3 px-4 pb-[max(1.5rem,env(safe-area-inset-bottom))] pt-4"
           aria-label="Main menu"
         >
           <ActionButton
@@ -235,6 +174,12 @@ export function MainMenu({
             icon={<ProfileIcon />}
             onClick={noop}
           />
+          <Link
+            href="/combat-test"
+            className="col-span-2 flex w-full items-center justify-center rounded-2xl border border-cyan-500/30 bg-gradient-to-br from-cyan-700 via-teal-800 to-cyan-950 py-3.5 text-center text-sm font-semibold tracking-wide text-white shadow-lg transition hover:shadow-[0_0_24px_rgba(34,211,238,0.3)] active:scale-[0.98]"
+          >
+            Test Combat
+          </Link>
         </nav>
       </div>
     </div>
