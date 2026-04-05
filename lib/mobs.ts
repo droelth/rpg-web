@@ -20,8 +20,8 @@ const MOB_PROFILE: Record<
   MobType,
   { hp: number; atk: number; def: number; crit: number }
 > = {
-  bruiser: { hp: 1.08, atk: 0.9, def: 1.02, crit: 0.5 },
-  assassin: { hp: 0.78, atk: 1.1, def: 0.78, crit: 1.2 },
+  bruiser: { hp: 0.98, atk: 0.82, def: 0.94, crit: 0.45 },
+  assassin: { hp: 0.72, atk: 1.0, def: 0.72, crit: 0.95 },
   caster: { hp: 0.74, atk: 1.12, def: 0.68, crit: 0.95 },
   guardian: { hp: 1.05, atk: 0.82, def: 1.22, crit: 0.45 },
 };

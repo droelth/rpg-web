@@ -6,6 +6,8 @@ import type {
   ItemType,
 } from "@/types/item";
 import { SLOT_ORDER } from "@/types/item";
+import type { EnchantId } from "@/types/item";
+import { isValidEnchantId } from "@/lib/enchantCatalog";
 
 const ITEM_RARITIES: readonly ItemRarity[] = [
   "common",
@@ -327,18 +329,27 @@ export function parseInventory(raw: unknown): InventoryInstance[] {
         const c = canonicalItemId(tid);
         if (!c) continue;
         const r = o.rarity;
-        out.push(
+        const en = o.enchant;
+        const enchant: EnchantId | undefined = isValidEnchantId(en)
+          ? en
+          : undefined;
+        const base: InventoryInstance =
           isValidItemRarity(r)
             ? { instanceId: iid, itemId: c, rarity: r }
-            : { instanceId: iid, itemId: c },
-        );
+            : { instanceId: iid, itemId: c };
+        if (enchant) base.enchant = enchant;
+        out.push(base);
         continue;
       }
       if (typeof o.id === "string") {
         const c = canonicalItemId(o.id);
         if (!c) continue;
         const r = o.rarity;
-        out.push(
+        const en = o.enchant;
+        const enchant: EnchantId | undefined = isValidEnchantId(en)
+          ? en
+          : undefined;
+        const legacyBase: InventoryInstance =
           isValidItemRarity(r)
             ? {
                 instanceId: legacyInventoryInstanceId(i, c),
@@ -348,8 +359,9 @@ export function parseInventory(raw: unknown): InventoryInstance[] {
             : {
                 instanceId: legacyInventoryInstanceId(i, c),
                 itemId: c,
-              },
-        );
+              };
+        if (enchant) legacyBase.enchant = enchant;
+        out.push(legacyBase);
       }
     }
   }
@@ -365,6 +377,7 @@ export function serializeInventoryInstance(
     itemId: inst.itemId,
   };
   if (inst.rarity) row.rarity = inst.rarity;
+  if (inst.enchant) row.enchant = inst.enchant;
   return row;
 }
 

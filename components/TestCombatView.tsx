@@ -8,14 +8,17 @@ import {
   advanceHpStagnationAfterStep,
   createHpStagnationState,
   decideFirstTurn,
+  initialCombatEnchantState,
   MAX_COMBAT_RESOLUTION_STEPS,
   runCombatStep,
   simulateCombatToWinner,
   STALEMATE_LOG_LINE,
+  type CombatEnchantState,
   type Fighter,
   type HpStagnationState,
   type Stats,
 } from "@/lib/combat";
+import { resolveEquippedWeaponEnchant } from "@/lib/enchantCatalog";
 import {
   appendCombatLogLines,
   initialCombatLogLines,
@@ -62,6 +65,9 @@ export function TestCombatView() {
   const logScrollRef = useRef<HTMLUListElement | null>(null);
   const stagnationRef = useRef<HpStagnationState | null>(null);
   const testAutoStepCountRef = useRef(0);
+  const combatEnchantRef = useRef<CombatEnchantState>(
+    initialCombatEnchantState(null),
+  );
 
   const isFinished = winner !== null;
 
@@ -153,6 +159,9 @@ export function TestCombatView() {
           ]),
         );
         setWinner(null);
+        combatEnchantRef.current = initialCombatEnchantState(
+          resolveEquippedWeaponEnchant(userDoc.inventory, userDoc.equipped),
+        );
         stagnationRef.current = createHpStagnationState(p, e);
         testAutoStepCountRef.current = 0;
         setIsRunning(true);
@@ -184,7 +193,13 @@ export function TestCombatView() {
         return;
       }
 
-      const step = runCombatStep({ player, enemy, turn });
+      const step = runCombatStep({
+        player,
+        enemy,
+        turn,
+        enchant: combatEnchantRef.current,
+      });
+      combatEnchantRef.current = step.enchant;
       setPlayer(step.player);
       setEnemy(step.enemy);
       setTurn(step.turn);
@@ -237,7 +252,12 @@ export function TestCombatView() {
     if (!player || !enemy || isFinished) return;
     clearCombatTimer();
 
-    const result = simulateCombatToWinner({ player, enemy, turn });
+    const result = simulateCombatToWinner({
+      player,
+      enemy,
+      turn,
+      enchant: combatEnchantRef.current,
+    });
 
     setPlayer(result.player);
     setEnemy(result.enemy);

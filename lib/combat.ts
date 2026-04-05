@@ -1,3 +1,5 @@
+import type { WeaponEnchantRuntime } from "@/lib/enchantCatalog";
+
 export type Stats = {
   hp: number;
   atk: number;
@@ -19,9 +21,21 @@ export function calculateDamage(
   attacker: Fighter,
   defender: Fighter,
 ): { damage: number; isCrit: boolean } {
-  const isCrit = Math.random() < attacker.stats.crit / 100;
+  return rollStrikeDamage(attacker, defender, 0, 0);
+}
+
+/** `critBonus` adds to attacker crit %; `flatReduction` subtracts from final damage (min 0). */
+export function rollStrikeDamage(
+  attacker: Fighter,
+  defender: Fighter,
+  critBonus: number,
+  flatReduction: number,
+): { damage: number; isCrit: boolean } {
+  const critPct = Math.min(100, Math.max(0, attacker.stats.crit + critBonus));
+  const isCrit = Math.random() < critPct / 100;
   const attack = isCrit ? attacker.stats.atk * 1.5 : attacker.stats.atk;
-  const damage = Math.max(0, Math.floor(attack - defender.stats.def));
+  const raw = Math.max(0, Math.floor(attack - defender.stats.def));
+  const damage = Math.max(0, raw - flatReduction);
   return { damage, isCrit };
 }
 
@@ -42,10 +56,31 @@ function cloneFighter(f: Fighter): Fighter {
 
 export type CombatTurn = "player" | "enemy";
 
+export type CombatEnchantState = {
+  weaponEnchant: WeaponEnchantRuntime;
+  poisonActive: boolean;
+  /** Next poison tick deals min(5, this value), then increments. */
+  poisonNextTickNumber: number;
+  /** Subtracted from the enemy’s next damage roll, then cleared. */
+  enemyDamageReductionOnNextHit: number;
+};
+
+export function initialCombatEnchantState(
+  weaponEnchant: WeaponEnchantRuntime,
+): CombatEnchantState {
+  return {
+    weaponEnchant,
+    poisonActive: false,
+    poisonNextTickNumber: 1,
+    enemyDamageReductionOnNextHit: 0,
+  };
+}
+
 export type RunCombatStepState = {
   player: Fighter;
   enemy: Fighter;
   turn: CombatTurn;
+  enchant: CombatEnchantState;
 };
 
 /** One combat strike for UI (attack lunge, hit shake, crit flair). */
@@ -61,14 +96,51 @@ export type RunCombatStepResult = RunCombatStepState & {
   animationCue: CombatAnimationCue;
 };
 
-/** One turn: damage, logs, death check, turn switch. Pure aside from RNG in calculateDamage. */
+/** One turn: optional poison tick, strike, enchant hooks; death checks. */
 export function runCombatStep(state: RunCombatStepState): RunCombatStepResult {
   const { player, enemy, turn } = state;
+  let enc = state.enchant;
   const logEntries: string[] = [];
 
   if (turn === "player") {
-    const { damage, isCrit } = calculateDamage(player, enemy);
-    const nextEnemy = cloneFighter(enemy);
+    let workingEnemy = enemy;
+
+    if (enc.weaponEnchant === "poison" && enc.poisonActive) {
+      const dot = Math.min(5, enc.poisonNextTickNumber);
+      enc = {
+        ...enc,
+        poisonNextTickNumber: enc.poisonNextTickNumber + 1,
+      };
+      const poisonedEnemy = cloneFighter(workingEnemy);
+      applyDamage(poisonedEnemy, dot);
+      logEntries.push(`Poison deals ${dot} damage.`);
+      if (isDead(poisonedEnemy)) {
+        logEntries.push(`${workingEnemy.name} is defeated!`);
+        return {
+          player,
+          enemy: poisonedEnemy,
+          turn,
+          enchant: enc,
+          winner: "player",
+          logEntries,
+          animationCue: {
+            attacker: "player",
+            damage: dot,
+            isCrit: false,
+          },
+        };
+      }
+      workingEnemy = poisonedEnemy;
+    }
+
+    const critBonus = enc.weaponEnchant === "keen" ? 5 : 0;
+    const { damage, isCrit } = rollStrikeDamage(
+      player,
+      workingEnemy,
+      critBonus,
+      0,
+    );
+    const nextEnemy = cloneFighter(workingEnemy);
     applyDamage(nextEnemy, damage);
     const animationCue: CombatAnimationCue = {
       attacker: "player",
@@ -77,28 +149,57 @@ export function runCombatStep(state: RunCombatStepState): RunCombatStepResult {
     };
     if (isCrit) logEntries.push("CRITICAL HIT!");
     logEntries.push(`Player hits for ${damage} damage.`);
+
     if (isDead(nextEnemy)) {
-      logEntries.push(`${enemy.name} is defeated!`);
+      logEntries.push(`${workingEnemy.name} is defeated!`);
       return {
         player,
         enemy: nextEnemy,
         turn,
+        enchant: enc,
         winner: "player",
         logEntries,
         animationCue,
       };
     }
+
+    let nextPlayer = player;
+    if (damage > 0 && enc.weaponEnchant === "vampiric") {
+      const heal = Math.floor(damage * 0.15);
+      if (heal > 0) {
+        nextPlayer = cloneFighter(player);
+        nextPlayer.currentHp = Math.min(
+          nextPlayer.stats.hp,
+          nextPlayer.currentHp + heal,
+        );
+        logEntries.push(`Vampiric restores ${heal} HP.`);
+      }
+    }
+    if (damage > 0 && enc.weaponEnchant === "poison" && !enc.poisonActive) {
+      enc = { ...enc, poisonActive: true };
+    }
+    if (damage > 0 && enc.weaponEnchant === "frost") {
+      enc = { ...enc, enemyDamageReductionOnNextHit: 2 };
+    }
+
     return {
-      player,
+      player: nextPlayer,
       enemy: nextEnemy,
       turn: "enemy",
+      enchant: enc,
       winner: null,
       logEntries,
       animationCue,
     };
   }
 
-  const { damage, isCrit } = calculateDamage(enemy, player);
+  const reduction = enc.enemyDamageReductionOnNextHit;
+  if (reduction > 0) {
+    logEntries.push("Frost weakens the incoming strike.");
+  }
+  enc = { ...enc, enemyDamageReductionOnNextHit: 0 };
+
+  const { damage, isCrit } = rollStrikeDamage(enemy, player, 0, reduction);
   const nextPlayer = cloneFighter(player);
   applyDamage(nextPlayer, damage);
   const animationCue: CombatAnimationCue = {
@@ -114,6 +215,7 @@ export function runCombatStep(state: RunCombatStepState): RunCombatStepResult {
       player: nextPlayer,
       enemy,
       turn,
+      enchant: enc,
       winner: "enemy",
       logEntries,
       animationCue,
@@ -123,6 +225,7 @@ export function runCombatStep(state: RunCombatStepState): RunCombatStepResult {
     player: nextPlayer,
     enemy,
     turn: "player",
+    enchant: enc,
     winner: null,
     logEntries,
     animationCue,
@@ -288,17 +391,19 @@ export function simulateCombatToWinner(
   let p = state.player;
   let e = state.enemy;
   let t = state.turn;
+  let enc = state.enchant;
   const logEntries: string[] = [];
   let stagnation = createHpStagnationState(p, e);
   let steps = 0;
 
   while (steps < MAX_COMBAT_RESOLUTION_STEPS) {
     steps += 1;
-    const step = runCombatStep({ player: p, enemy: e, turn: t });
+    const step = runCombatStep({ player: p, enemy: e, turn: t, enchant: enc });
     logEntries.push(...step.logEntries);
     p = step.player;
     e = step.enemy;
     t = step.turn;
+    enc = step.enchant;
 
     if (step.winner) {
       return {

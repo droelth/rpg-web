@@ -1,3 +1,5 @@
+export type EnchantId = "poison" | "keen" | "vampiric" | "frost";
+
 export type ItemType = "weapon" | "armor" | "helmet" | "ring";
 
 export type ItemRarity = "common" | "uncommon" | "rare" | "epic" | "legendary";
@@ -33,6 +35,7 @@ export type InventoryInstance = {
   instanceId: string;
   itemId: string;
   rarity?: ItemRarity;
+  enchant?: EnchantId;
 };
 
 /** Each slot holds an inventory row’s `instanceId`, or null. */

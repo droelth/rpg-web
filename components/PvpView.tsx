@@ -16,14 +16,17 @@ import {
   advanceHpStagnationAfterStep,
   createHpStagnationState,
   decideFirstTurn,
+  initialCombatEnchantState,
   MAX_COMBAT_RESOLUTION_STEPS,
   runCombatStep,
   STALEMATE_LOG_LINE,
   type CombatAnimationCue,
+  type CombatEnchantState,
   type Fighter,
   type HpStagnationState,
   type Stats,
 } from "@/lib/combat";
+import { resolveEquippedWeaponEnchant } from "@/lib/enchantCatalog";
 import {
   appendCombatLogLines,
   initialCombatLogLines,
@@ -127,6 +130,9 @@ export function PvpView() {
   const logScrollRef = useRef<HTMLUListElement | null>(null);
   const pvpStagnationRef = useRef<HpStagnationState | null>(null);
   const pvpAutoStepCountRef = useRef(0);
+  const pvpCombatEnchantRef = useRef<CombatEnchantState>(
+    initialCombatEnchantState(null),
+  );
   const isFinished = winner !== null;
 
   const refreshUser = useCallback(async (uid: string) => {
@@ -217,7 +223,13 @@ export function PvpView() {
         return;
       }
 
-      const step = runCombatStep({ player, enemy, turn });
+      const step = runCombatStep({
+        player,
+        enemy,
+        turn,
+        enchant: pvpCombatEnchantRef.current,
+      });
+      pvpCombatEnchantRef.current = step.enchant;
       setStrikeSeq((n) => n + 1);
       setLastCue(step.animationCue);
       setPlayer(step.player);
@@ -333,6 +345,9 @@ export function PvpView() {
       setRewards(null);
       pvpAutoStepCountRef.current = 0;
       pvpStagnationRef.current = createHpStagnationState(p, e);
+      pvpCombatEnchantRef.current = initialCombatEnchantState(
+        resolveEquippedWeaponEnchant(fresh.inventory, fresh.equipped),
+      );
       setPhase("battle");
       setIsRunning(true);
     } catch (e) {
@@ -362,6 +377,7 @@ export function PvpView() {
     setLoadError(null);
     pvpStagnationRef.current = null;
     pvpAutoStepCountRef.current = 0;
+    pvpCombatEnchantRef.current = initialCombatEnchantState(null);
   }
 
   if (authError) {

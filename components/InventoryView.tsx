@@ -29,6 +29,7 @@ import {
   sortInventoryRowsBySlotOrder,
 } from "@/lib/items";
 import { EmptyEquipSlot, ItemCard } from "@/components/ItemCard";
+import { ENCHANT_BY_ID } from "@/lib/enchantCatalog";
 import { useAuth } from "@/hooks/useAuth";
 
 const SLOT_LABEL: Record<ItemType, string> = {
@@ -413,23 +414,30 @@ export function InventoryView() {
                       {SLOT_LABEL[slot]}
                     </p>
                     {it ? (
-                      <ItemCard
-                        item={it}
-                        displayRarity={equippedRow?.displayRarity}
-                        size="sm"
-                        layout="row"
-                        selected={
-                          selectedRow != null &&
-                          iid === selectedRow.instance.instanceId
-                        }
-                        disabled={saving}
-                        onClick={() => {
-                          if (!iid) return;
-                          const idx = sortedIndexByInstanceId.get(iid);
-                          setSelectedInvIndex(idx !== undefined ? idx : null);
-                        }}
-                        className="w-full"
-                      />
+                      <div className="space-y-1">
+                        <ItemCard
+                          item={it}
+                          displayRarity={equippedRow?.displayRarity}
+                          size="sm"
+                          layout="row"
+                          selected={
+                            selectedRow != null &&
+                            iid === selectedRow.instance.instanceId
+                          }
+                          disabled={saving}
+                          onClick={() => {
+                            if (!iid) return;
+                            const idx = sortedIndexByInstanceId.get(iid);
+                            setSelectedInvIndex(idx !== undefined ? idx : null);
+                          }}
+                          className="w-full"
+                        />
+                        {equippedRow?.instance.enchant ? (
+                          <p className="px-0.5 text-[10px] text-fuchsia-300/85">
+                            {ENCHANT_BY_ID[equippedRow.instance.enchant].name}
+                          </p>
+                        ) : null}
+                      </div>
                     ) : (
                       <EmptyEquipSlot
                         slotLabel={SLOT_LABEL[slot]}
@@ -471,17 +479,26 @@ export function InventoryView() {
                           row.instance.instanceId,
                         )!;
                         return (
-                          <ItemCard
+                          <div
                             key={row.instance.instanceId}
-                            item={row.item}
-                            displayRarity={row.displayRarity}
-                            size="md"
-                            layout="stack"
-                            selected={selectedInvIndex === i}
-                            disabled={saving}
-                            onClick={() => setSelectedInvIndex(i)}
                             className="mx-auto w-full max-w-[168px]"
-                          />
+                          >
+                            <ItemCard
+                              item={row.item}
+                              displayRarity={row.displayRarity}
+                              size="md"
+                              layout="stack"
+                              selected={selectedInvIndex === i}
+                              disabled={saving}
+                              onClick={() => setSelectedInvIndex(i)}
+                              className="w-full"
+                            />
+                            {row.instance.enchant ? (
+                              <p className="mt-1 text-center text-[10px] text-fuchsia-300/90">
+                                {ENCHANT_BY_ID[row.instance.enchant].name}
+                              </p>
+                            ) : null}
+                          </div>
                         );
                       })}
                     </Fragment>
@@ -505,6 +522,12 @@ export function InventoryView() {
                   <p className="mt-0.5 text-xs capitalize text-violet-300/70">
                     {selected.type}
                   </p>
+                  {selectedRow.instance.enchant ? (
+                    <p className="mt-2 text-sm font-medium text-fuchsia-300/90">
+                      Enchant:{" "}
+                      {ENCHANT_BY_ID[selectedRow.instance.enchant].name}
+                    </p>
+                  ) : null}
                   <ul className="mt-4 space-y-1.5 border-t border-white/10 pt-4 text-sm text-zinc-200">
                     {selectedStatLines.length ? (
                       selectedStatLines.map((line) => (

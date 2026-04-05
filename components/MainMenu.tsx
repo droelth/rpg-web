@@ -110,6 +110,25 @@ function InventoryIcon() {
   );
 }
 
+function EnchantressIcon() {
+  return (
+    <svg className="h-6 w-6" viewBox="0 0 24 24" fill="none" aria-hidden>
+      <path
+        d="M12 3l1.2 3.6L17 8l-3.8 1.4L12 13l-1.2-3.6L7 8l3.8-1.4L12 3zM19 14l.6 1.8 1.8.6-1.8.6-.6 1.8-.6-1.8-1.8-.6 1.8-.6.6-1.8z"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M5 16l2 6 2-4 4-2-6-2z"
+        stroke="currentColor"
+        strokeWidth="1.75"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 function TavernIcon() {
   return (
     <svg className="h-6 w-6" viewBox="0 0 24 24" fill="none" aria-hidden>
@@ -215,6 +234,12 @@ export function MainMenu({
             theme="forge"
             icon={<ForgeIcon />}
             href="/forge"
+          />
+          <ActionButton
+            label="Enchantress"
+            theme="enchantress"
+            icon={<EnchantressIcon />}
+            href="/enchantress"
           />
           <ActionButton
             label="Inventory"

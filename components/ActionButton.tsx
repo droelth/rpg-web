@@ -10,6 +10,7 @@ export type ActionTheme =
   | "shop"
   | "forge"
   | "inventory"
+  | "enchantress"
   | "tavern"
   | "profile";
 
@@ -52,6 +53,12 @@ const THEME_STYLES: Record<
       "from-violet-600 via-purple-800 to-violet-950 hover:from-violet-500 hover:via-purple-700 hover:to-violet-900",
     glow: "hover:shadow-[0_0_28px_rgba(167,139,250,0.35)]",
     border: "border-violet-400/25",
+  },
+  enchantress: {
+    gradient:
+      "from-fuchsia-600 via-pink-800 to-purple-950 hover:from-fuchsia-500 hover:via-pink-700 hover:to-purple-900",
+    glow: "hover:shadow-[0_0_28px_rgba(232,121,249,0.35)]",
+    border: "border-fuchsia-400/30",
   },
   tavern: {
     gradient:

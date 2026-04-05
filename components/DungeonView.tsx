@@ -9,15 +9,21 @@ import {
   advanceHpStagnationAfterStep,
   createHpStagnationState,
   decideFirstTurn,
+  initialCombatEnchantState,
   MAX_COMBAT_RESOLUTION_STEPS,
   runCombatStep,
   simulateCombatToWinner,
   STALEMATE_LOG_LINE,
   type CombatAnimationCue,
+  type CombatEnchantState,
   type Fighter,
   type HpStagnationState,
   type Stats,
 } from "@/lib/combat";
+import {
+  resolveEquippedWeaponEnchant,
+  type WeaponEnchantRuntime,
+} from "@/lib/enchantCatalog";
 import {
   appendCombatLogLines,
   initialCombatLogLines,
@@ -94,6 +100,10 @@ export function DungeonView() {
   const stagnationRef = useRef<HpStagnationState | null>(null);
   /** Safety cap if stagnation logic ever fails to fire. */
   const autoCombatStepCountRef = useRef(0);
+  const combatEnchantRef = useRef<CombatEnchantState>(
+    initialCombatEnchantState(null),
+  );
+  const weaponEnchantForRunRef = useRef<WeaponEnchantRuntime>(null);
 
   const activeDungeonRef = useRef<DungeonDefinition | null>(null);
   const stageIndexRef = useRef(0);
@@ -194,6 +204,13 @@ export function DungeonView() {
           first === "player" ? "You take the first turn!" : `${e.name} moves first!`,
         ]),
       );
+      weaponEnchantForRunRef.current = resolveEquippedWeaponEnchant(
+        profile.inventory,
+        profile.equipped,
+      );
+      combatEnchantRef.current = initialCombatEnchantState(
+        weaponEnchantForRunRef.current,
+      );
       stagnationRef.current = createHpStagnationState(p, e);
       autoCombatStepCountRef.current = 0;
       setPhase("combat");
@@ -247,6 +264,9 @@ export function DungeonView() {
             : `${nextEnemy.name} moves first!`,
         ]),
       );
+      combatEnchantRef.current = initialCombatEnchantState(
+        weaponEnchantForRunRef.current,
+      );
       stagnationRef.current = createHpStagnationState(
         survivingPlayer,
         nextEnemy,
@@ -284,7 +304,13 @@ export function DungeonView() {
         return;
       }
 
-      const step = runCombatStep({ player, enemy, turn });
+      const step = runCombatStep({
+        player,
+        enemy,
+        turn,
+        enchant: combatEnchantRef.current,
+      });
+      combatEnchantRef.current = step.enchant;
 
       setStrikeSeq((n) => n + 1);
       setLastCue(step.animationCue);
@@ -343,7 +369,12 @@ export function DungeonView() {
     if (!player || !enemy || isFinished || phase !== "combat") return;
     clearCombatTimer();
 
-    const result = simulateCombatToWinner({ player, enemy, turn });
+    const result = simulateCombatToWinner({
+      player,
+      enemy,
+      turn,
+      enchant: combatEnchantRef.current,
+    });
 
     setLog((prev) => appendCombatLogLines(prev, result.logEntries));
     setLastCue(null);
@@ -393,6 +424,8 @@ export function DungeonView() {
     statsSnapshotRef.current = null;
     stagnationRef.current = null;
     autoCombatStepCountRef.current = 0;
+    combatEnchantRef.current = initialCombatEnchantState(null);
+    weaponEnchantForRunRef.current = null;
   }, [clearCombatTimer]);
 
   const handleClaimReward = useCallback(async () => {
