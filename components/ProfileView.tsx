@@ -33,6 +33,10 @@ import {
 } from "@/lib/itemRarityStyles";
 import { useAuth } from "@/hooks/useAuth";
 import { auth, getDb } from "@/lib/firebase";
+import {
+  resolveProfileDocumentId,
+  userAuthIndexDocRef,
+} from "@/lib/userProfileFirestore";
 
 const SLOT_LABEL: Record<ItemType, string> = {
   weapon: "Weapon",
@@ -144,7 +148,12 @@ export function ProfileView({ targetUserId }: ProfileViewProps) {
     setDeleteErr(null);
     setRemoving(true);
     try {
-      await deleteDoc(doc(getDb(), "users", user.uid));
+      const db = getDb();
+      const profileId = await resolveProfileDocumentId(user.uid);
+      if (profileId) {
+        await deleteDoc(doc(db, "users", profileId));
+      }
+      await deleteDoc(userAuthIndexDocRef(user.uid));
       await signOut(auth);
       router.push("/");
     } catch (e) {

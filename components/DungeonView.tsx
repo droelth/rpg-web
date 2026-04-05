@@ -7,7 +7,10 @@ import { AnimatedHpBar } from "@/components/combat/AnimatedHpBar";
 import { CombatAnimatedLog } from "@/components/combat/CombatAnimatedLog";
 import {
   decideFirstTurn,
+  MAX_COMBAT_RESOLUTION_STEPS,
+  resolveCombatStalemateFromState,
   runCombatStep,
+  simulateCombatToWinner,
   type CombatAnimationCue,
   type Fighter,
   type Stats,
@@ -83,11 +86,17 @@ export function DungeonView() {
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const logScrollRef = useRef<HTMLUListElement | null>(null);
+  /** Per-stage auto-combat steps; resets on stage/dungeon change. Prevents infinite 0-damage fights. */
+  const autoCombatStepCountRef = useRef(0);
 
   const activeDungeonRef = useRef<DungeonDefinition | null>(null);
   const stageIndexRef = useRef(0);
   activeDungeonRef.current = activeDungeon;
   stageIndexRef.current = stageIndex;
+
+  useEffect(() => {
+    autoCombatStepCountRef.current = 0;
+  }, [stageIndex, activeDungeon?.id]);
 
   const isFinished = winner !== null;
 
@@ -252,6 +261,26 @@ export function DungeonView() {
     const delayMs = 1000 / speed;
     const id = setTimeout(() => {
       timerRef.current = null;
+      autoCombatStepCountRef.current += 1;
+      if (autoCombatStepCountRef.current > MAX_COMBAT_RESOLUTION_STEPS) {
+        const { winner: w, logEntries } = resolveCombatStalemateFromState({
+          player,
+          enemy,
+          turn,
+        });
+        setLog((prev) => appendCombatLogLines(prev, logEntries));
+        setLastCue(null);
+        setIsRunning(false);
+        if (w === "player") {
+          setWinner("player");
+          handlePlayerWonStage(player);
+        } else {
+          setWinner("enemy");
+          handleCombatLoss();
+        }
+        return;
+      }
+
       const step = runCombatStep({ player, enemy, turn });
 
       setStrikeSeq((n) => n + 1);
@@ -293,31 +322,18 @@ export function DungeonView() {
     if (!player || !enemy || isFinished || phase !== "combat") return;
     clearCombatTimer();
 
-    let p = player;
-    let e = enemy;
-    let t = turn;
-    let w: "player" | "enemy" | null = null;
-    const newTexts: string[] = [];
+    const result = simulateCombatToWinner({ player, enemy, turn });
 
-    while (!w) {
-      const step = runCombatStep({ player: p, enemy: e, turn: t });
-      newTexts.push(...step.logEntries);
-      p = step.player;
-      e = step.enemy;
-      t = step.turn;
-      w = step.winner;
-    }
-
-    setLog((prev) => appendCombatLogLines(prev, newTexts));
+    setLog((prev) => appendCombatLogLines(prev, result.logEntries));
     setLastCue(null);
-    setPlayer(p);
-    setEnemy(e);
-    setTurn(t);
-    setWinner(w);
+    setPlayer(result.player);
+    setEnemy(result.enemy);
+    setTurn(result.turn);
+    setWinner(result.winner);
     setIsRunning(false);
 
-    if (w === "player") {
-      handlePlayerWonStage(p);
+    if (result.winner === "player") {
+      handlePlayerWonStage(result.player);
     } else {
       handleCombatLoss();
     }

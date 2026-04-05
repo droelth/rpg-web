@@ -17,6 +17,10 @@ import {
   timestampToMillis,
 } from "@/lib/energySystem";
 import { getDb } from "./firebase";
+import {
+  getUserProfileDocRef,
+  resolveProfileDocumentId,
+} from "./userProfileFirestore";
 import type { CombatTotals } from "./inventoryUtils";
 import {
   getEffectiveCombatTotals,
@@ -113,95 +117,124 @@ function resolveEffectiveStats(
   return stored;
 }
 
+type UserDocRef = ReturnType<typeof doc>;
+
+/**
+ * Load and migrate an existing `users/{uid}` document. Does not create the doc.
+ */
+async function hydrateExistingUserDocument(
+  ref: UserDocRef,
+  data: Record<string, unknown>,
+): Promise<UserDocument> {
+  if (!("wins" in data) || !("losses" in data)) {
+    void updateDoc(ref, {
+      wins: readWinLoss(data, "wins"),
+      losses: readWinLoss(data, "losses"),
+    });
+  }
+  const { gold } = readGold(data);
+  const nowMs = Date.now();
+  let storedEnergy =
+    typeof data.energy === "number" && Number.isFinite(data.energy)
+      ? Math.floor(data.energy)
+      : MAX_ENERGY;
+  if (storedEnergy > MAX_ENERGY) {
+    storedEnergy = MAX_ENERGY;
+    await updateDoc(ref, { energy: MAX_ENERGY });
+  }
+  const lastMs = timestampToMillis(data.lastEnergyUpdate) ?? nowMs;
+  const regen = calculateEnergyState(storedEnergy, lastMs, nowMs);
+  let displayEnergy = regen.energy;
+  let lastEnergyOut = parseLastEnergyTs(data);
+  if (regen.regenTicks > 0) {
+    await updateDoc(ref, {
+      energy: regen.energy,
+      lastEnergyUpdate: Timestamp.fromMillis(regen.lastEnergyUpdateMs),
+    });
+    displayEnergy = regen.energy;
+    lastEnergyOut = Timestamp.fromMillis(regen.lastEnergyUpdateMs);
+  } else if (!lastEnergyOut) {
+    await updateDoc(ref, {
+      lastEnergyUpdate: Timestamp.fromMillis(nowMs),
+    });
+    lastEnergyOut = Timestamp.fromMillis(nowMs);
+  }
+
+  const inventory = parseInventory(data.inventory);
+  let equipped = sanitizeEquippedToInventory(
+    parseEquipped(data.equipped),
+    inventory,
+  );
+  const heroClass =
+    typeof data.class === "string" && data.class.trim().length > 0
+      ? data.class.trim()
+      : null;
+  const classSafeEquipped = sanitizeEquippedToHeroClass(
+    equipped,
+    inventory,
+    heroClass,
+  );
+  if (JSON.stringify(classSafeEquipped) !== JSON.stringify(equipped)) {
+    void updateDoc(ref, { equipped: classSafeEquipped });
+  }
+  equipped = classSafeEquipped;
+  const stats = data.stats ?? null;
+  const effectiveStats = resolveEffectiveStats(
+    ref,
+    data,
+    equipped,
+    inventory,
+    stats,
+  );
+  const lf = parseUserLevelFields(data);
+  const rankPoints = readRankPoints(data);
+  const wins = readWinLoss(data, "wins");
+  const losses = readWinLoss(data, "losses");
+  return {
+    username: (data.username as string | undefined) ?? null,
+    class: (data.class as string | undefined) ?? null,
+    stats,
+    level: lf.level,
+    xp: lf.xp,
+    xpToNext: lf.xpToNext,
+    gold,
+    energy: displayEnergy,
+    rankPoints,
+    wins,
+    losses,
+    lastEnergyUpdate: lastEnergyOut,
+    inventory,
+    equipped,
+    effectiveStats,
+    shop: parseShop(data.shop),
+    createdAt: (data.createdAt as Timestamp | undefined) ?? null,
+  };
+}
+
+/**
+ * Read user profile only — does not create a placeholder document.
+ * Use on the home screen before onboarding; the first write is onboarding.
+ */
+export async function getUserDocumentIfExists(
+  uid: string,
+): Promise<UserDocument | null> {
+  const profileId = await resolveProfileDocumentId(uid);
+  if (!profileId) return null;
+  const ref = doc(getDb(), "users", profileId);
+  const snap = await getDoc(ref);
+  if (!snap.exists()) return null;
+  return hydrateExistingUserDocument(ref, snap.data() as Record<string, unknown>);
+}
+
 export async function getOrCreateUser(uid: string): Promise<UserDocument> {
-  const ref = doc(getDb(), "users", uid);
+  const ref = await getUserProfileDocRef(uid);
   const snap = await getDoc(ref);
 
   if (snap.exists()) {
-    const data = snap.data() as Record<string, unknown>;
-    if (!("wins" in data) || !("losses" in data)) {
-      void updateDoc(ref, {
-        wins: readWinLoss(data, "wins"),
-        losses: readWinLoss(data, "losses"),
-      });
-    }
-    const { gold } = readGold(data);
-    const nowMs = Date.now();
-    let storedEnergy =
-      typeof data.energy === "number" && Number.isFinite(data.energy)
-        ? Math.floor(data.energy)
-        : MAX_ENERGY;
-    if (storedEnergy > MAX_ENERGY) {
-      storedEnergy = MAX_ENERGY;
-      await updateDoc(ref, { energy: MAX_ENERGY });
-    }
-    const lastMs = timestampToMillis(data.lastEnergyUpdate) ?? nowMs;
-    const regen = calculateEnergyState(storedEnergy, lastMs, nowMs);
-    let displayEnergy = regen.energy;
-    let lastEnergyOut = parseLastEnergyTs(data);
-    if (regen.regenTicks > 0) {
-      await updateDoc(ref, {
-        energy: regen.energy,
-        lastEnergyUpdate: Timestamp.fromMillis(regen.lastEnergyUpdateMs),
-      });
-      displayEnergy = regen.energy;
-      lastEnergyOut = Timestamp.fromMillis(regen.lastEnergyUpdateMs);
-    } else if (!lastEnergyOut) {
-      await updateDoc(ref, {
-        lastEnergyUpdate: Timestamp.fromMillis(nowMs),
-      });
-      lastEnergyOut = Timestamp.fromMillis(nowMs);
-    }
-
-    const inventory = parseInventory(data.inventory);
-    let equipped = sanitizeEquippedToInventory(
-      parseEquipped(data.equipped),
-      inventory,
-    );
-    const heroClass =
-      typeof data.class === "string" && data.class.trim().length > 0
-        ? data.class.trim()
-        : null;
-    const classSafeEquipped = sanitizeEquippedToHeroClass(
-      equipped,
-      inventory,
-      heroClass,
-    );
-    if (JSON.stringify(classSafeEquipped) !== JSON.stringify(equipped)) {
-      void updateDoc(ref, { equipped: classSafeEquipped });
-    }
-    equipped = classSafeEquipped;
-    const stats = data.stats ?? null;
-    const effectiveStats = resolveEffectiveStats(
+    return hydrateExistingUserDocument(
       ref,
-      data,
-      equipped,
-      inventory,
-      stats,
+      snap.data() as Record<string, unknown>,
     );
-    const lf = parseUserLevelFields(data);
-    const rankPoints = readRankPoints(data);
-    const wins = readWinLoss(data, "wins");
-    const losses = readWinLoss(data, "losses");
-    return {
-      username: (data.username as string | undefined) ?? null,
-      class: (data.class as string | undefined) ?? null,
-      stats,
-      level: lf.level,
-      xp: lf.xp,
-      xpToNext: lf.xpToNext,
-      gold,
-      energy: displayEnergy,
-      rankPoints,
-      wins,
-      losses,
-      lastEnergyUpdate: lastEnergyOut,
-      inventory,
-      equipped,
-      effectiveStats,
-      shop: parseShop(data.shop),
-      createdAt: (data.createdAt as Timestamp | undefined) ?? null,
-    };
   }
 
   const equippedNew: EquippedState = { ...EMPTY_EQUIPPED };
@@ -216,6 +249,7 @@ export async function getOrCreateUser(uid: string): Promise<UserDocument> {
   const newUser: Omit<UserDocument, "createdAt" | "lastEnergyUpdate"> & {
     createdAt: ReturnType<typeof serverTimestamp>;
     lastEnergyUpdate: ReturnType<typeof serverTimestamp>;
+    authUid: string;
   } = {
     username: null,
     class: null,
@@ -234,6 +268,7 @@ export async function getOrCreateUser(uid: string): Promise<UserDocument> {
     effectiveStats,
     shop: { items: [], lastRefresh: null },
     createdAt: serverTimestamp(),
+    authUid: uid,
   };
 
   await setDoc(ref, newUser);

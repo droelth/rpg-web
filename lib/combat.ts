@@ -128,3 +128,88 @@ export function runCombatStep(state: RunCombatStepState): RunCombatStepResult {
     animationCue,
   };
 }
+
+/**
+ * When both sides deal 0 damage every turn (e.g. def ≥ atk for both), combat never ends.
+ * Skip-to-end runs this many steps synchronously; auto-combat uses the same cap per stage.
+ */
+export const MAX_COMBAT_RESOLUTION_STEPS = 12_000;
+
+/** Break a damage stalemate: higher current HP wins; tie is random. */
+export function resolveStalemateWinner(
+  player: Fighter,
+  enemy: Fighter,
+): CombatTurn {
+  if (player.currentHp > enemy.currentHp) return "player";
+  if (player.currentHp < enemy.currentHp) return "enemy";
+  return Math.random() < 0.5 ? "player" : "enemy";
+}
+
+/** Appended to the log when {@link MAX_COMBAT_RESOLUTION_STEPS} is hit or skip resolves a stalemate. */
+export const STALEMATE_LOG_LINE =
+  "Neither side can break the defense—fate declares a victor.";
+
+export type SimulateCombatToWinnerResult = {
+  player: Fighter;
+  enemy: Fighter;
+  turn: CombatTurn;
+  winner: CombatTurn;
+  /** All combat lines from simulated steps, plus {@link STALEMATE_LOG_LINE} when applicable. */
+  logEntries: string[];
+  /** True when no normal KO occurred within the step budget. */
+  resolvedByStalemate: boolean;
+};
+
+/**
+ * Fast-forward combat until a KO or until {@link MAX_COMBAT_RESOLUTION_STEPS}, then
+ * {@link resolveStalemateWinner}. Use for Skip.
+ */
+export function simulateCombatToWinner(
+  state: RunCombatStepState,
+): SimulateCombatToWinnerResult {
+  let p = state.player;
+  let e = state.enemy;
+  let t = state.turn;
+  const logEntries: string[] = [];
+  let w: CombatTurn | null = null;
+  let steps = 0;
+
+  while (!w && steps < MAX_COMBAT_RESOLUTION_STEPS) {
+    steps += 1;
+    const step = runCombatStep({ player: p, enemy: e, turn: t });
+    logEntries.push(...step.logEntries);
+    p = step.player;
+    e = step.enemy;
+    t = step.turn;
+    w = step.winner;
+  }
+
+  let resolvedByStalemate = false;
+  if (!w) {
+    w = resolveStalemateWinner(p, e);
+    logEntries.push(STALEMATE_LOG_LINE);
+    resolvedByStalemate = true;
+  }
+
+  return {
+    player: p,
+    enemy: e,
+    turn: t,
+    winner: w,
+    logEntries,
+    resolvedByStalemate,
+  };
+}
+
+/**
+ * After real-time combat hits {@link MAX_COMBAT_RESOLUTION_STEPS} without a KO,
+ * declare a victor without re-simulating (same rule as skip stalemate).
+ */
+export function resolveCombatStalemateFromState(
+  state: RunCombatStepState,
+): { winner: CombatTurn; logEntries: string[] } {
+  return {
+    winner: resolveStalemateWinner(state.player, state.enemy),
+    logEntries: [STALEMATE_LOG_LINE],
+  };
+}

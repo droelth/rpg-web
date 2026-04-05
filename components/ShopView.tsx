@@ -1,10 +1,10 @@
 "use client";
 
 import Link from "next/link";
-import { doc, serverTimestamp, updateDoc } from "firebase/firestore";
+import { serverTimestamp, updateDoc } from "firebase/firestore";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { SLOT_ORDER } from "@/types/item";
-import { getDb } from "@/lib/firebase";
+import { getUserProfileDocRef } from "@/lib/userProfileFirestore";
 import { getOrCreateUser, type UserDocument } from "@/lib/getOrCreateUser";
 import { HERO_CLASSES } from "@/lib/heroClasses";
 import { persistEffectiveCombatStats } from "@/lib/inventoryUtils";
@@ -62,7 +62,8 @@ export function ShopView() {
         isShopStale(shop.lastRefresh) || shopNeedsRegeneration(shop);
       if (!needs) return docSnap;
       const offers = generateShop(docSnap.class);
-      await updateDoc(doc(getDb(), "users", uid), {
+      const userRef = await getUserProfileDocRef(uid);
+      await updateDoc(userRef, {
         shop: {
           items: serializeShopOffers(offers),
           lastRefresh: serverTimestamp(),

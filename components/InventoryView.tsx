@@ -2,12 +2,12 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { doc, updateDoc } from "firebase/firestore";
+import { updateDoc } from "firebase/firestore";
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
 import type { EquippedState, Item, ItemType } from "@/types/item";
 import { SLOT_ORDER } from "@/types/item";
 import { getInventoryPortraitPath } from "@/lib/classPortrait";
-import { getDb } from "@/lib/firebase";
+import { getUserProfileDocRef } from "@/lib/userProfileFirestore";
 import { getOrCreateUser, type UserDocument } from "@/lib/getOrCreateUser";
 import type { CombatTotals } from "@/lib/inventoryUtils";
 import {
@@ -284,7 +284,8 @@ export function InventoryView() {
     setErr(null);
     try {
       const next = { ...userDoc.equipped, [slot]: null };
-      await updateDoc(userFirestoreRef(user.uid), { equipped: next });
+      const ref = await getUserProfileDocRef(user.uid);
+      await updateDoc(ref, { equipped: next });
       await refresh(user.uid);
       setSelectedInvIndex(null);
     } catch (e) {
@@ -293,10 +294,6 @@ export function InventoryView() {
     } finally {
       setSaving(false);
     }
-  }
-
-  function userFirestoreRef(uid: string) {
-    return doc(getDb(), "users", uid);
   }
 
   function slotItem(slot: ItemType): Item | undefined {

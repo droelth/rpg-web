@@ -1,7 +1,8 @@
-import { doc, getDoc, updateDoc } from "firebase/firestore";
+import { getDoc, updateDoc } from "firebase/firestore";
 import type { CombatTotals } from "@/lib/inventoryUtils";
 import { parseBaseStats, persistEffectiveCombatStats } from "@/lib/inventoryUtils";
 import { getDb } from "./firebase";
+import { getUserProfileDocRef } from "./userProfileFirestore";
 
 export const XP_ON_WIN = 50;
 export const XP_ON_LOSS = 10;
@@ -20,10 +21,10 @@ export type UserLevelFields = {
   class: string | null;
 };
 
-/** XP needed for the current level’s bar: `100 + (level * 50)` (matches post–level-up rule). */
+/** XP needed for the current level’s bar: `150 + (level * 75)` (matches post–level-up rule). */
 export function xpToNextForCurrentLevel(level: number): number {
   const L = Math.max(1, Math.floor(level));
-  return 100 + L * 50;
+  return 150 + L * 75;
 }
 
 function applyClassLevelBonus(stats: CombatTotals, classId: string | null): void {
@@ -157,7 +158,7 @@ export async function persistCombatProgression(
   uid: string,
   outcome: "win" | "loss",
 ): Promise<UserLevelFields> {
-  const ref = doc(getDb(), "users", uid);
+  const ref = await getUserProfileDocRef(uid);
   const snap = await getDoc(ref);
   if (!snap.exists()) {
     throw new Error("User document not found");

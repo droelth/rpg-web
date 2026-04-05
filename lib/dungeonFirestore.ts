@@ -1,7 +1,8 @@
-import { doc, getDoc, updateDoc } from "firebase/firestore";
+import { getDoc, updateDoc } from "firebase/firestore";
 import type { InventoryInstance } from "@/types/item";
 import { INITIAL_USER_GOLD } from "@/lib/getOrCreateUser";
 import { getDb } from "@/lib/firebase";
+import { getUserProfileDocRef } from "@/lib/userProfileFirestore";
 import { inventoryToFirestore, parseInventory } from "@/lib/items";
 import { persistEffectiveCombatStats } from "@/lib/inventoryUtils";
 import { applyLevelUp, parseUserLevelFields } from "@/lib/levelSystem";
@@ -19,7 +20,7 @@ export async function persistDungeonClaim(
   uid: string,
   payload: DungeonClaimPayload,
 ): Promise<void> {
-  const ref = doc(getDb(), "users", uid);
+  const ref = await getUserProfileDocRef(uid);
   const snap = await getDoc(ref);
   if (!snap.exists()) {
     throw new Error("User document not found");

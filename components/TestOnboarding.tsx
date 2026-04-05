@@ -1,7 +1,13 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { doc, updateDoc } from "firebase/firestore";
+import {
+  deleteDoc,
+  doc,
+  getDoc,
+  serverTimestamp,
+  setDoc,
+} from "firebase/firestore";
 import { getDb } from "@/lib/firebase";
 import {
   INITIAL_USER_ENERGY,
@@ -9,12 +15,19 @@ import {
 } from "@/lib/getOrCreateUser";
 import { createStarterInventory, inventoryToFirestore } from "@/lib/items";
 import { EMPTY_EQUIPPED } from "@/types/item";
-import { persistEffectiveCombatStats } from "@/lib/inventoryUtils";
+import {
+  getEffectiveCombatTotals,
+  persistEffectiveCombatStats,
+} from "@/lib/inventoryUtils";
 import { xpToNextForCurrentLevel } from "@/lib/levelSystem";
 import { DEFAULT_HERO_ID, HERO_CLASSES } from "@/lib/heroClasses";
 import { HeroSlider } from "@/components/HeroSlider";
 import { UsernameInput } from "@/components/UsernameInput";
 import { ContinueButton } from "@/components/ContinueButton";
+import {
+  allocateProfileDocIdForUsername,
+  userAuthIndexDocRef,
+} from "@/lib/userProfileFirestore";
 
 type TestOnboardingProps = {
   uid: string;
@@ -43,20 +56,62 @@ export function TestOnboarding({ uid, onSaved }: TestOnboardingProps) {
     setError(null);
     setSaving(true);
     try {
-      await updateDoc(doc(getDb(), "users", uid), {
-        username: trimmed,
-        class: selectedClass.id,
+      const db = getDb();
+      const profileDocId = await allocateProfileDocIdForUsername(uid, trimmed);
+      const profileRef = doc(db, "users", profileDocId);
+      const legacyRef = doc(db, "users", uid);
+      const [profileSnap, legacySnap] = await Promise.all([
+        getDoc(profileRef),
+        getDoc(legacyRef),
+      ]);
+
+      const inst = createStarterInventory(selectedClass.id);
+      const equipped = { ...EMPTY_EQUIPPED };
+      const effectiveStats = getEffectiveCombatTotals({
         stats: selectedClass.stats,
-        level: 1,
-        xp: 0,
-        xpToNext: xpToNextForCurrentLevel(1),
-        gold: INITIAL_USER_GOLD,
-        energy: INITIAL_USER_ENERGY,
-        inventory: inventoryToFirestore(
-          createStarterInventory(selectedClass.id),
-        ),
-        equipped: EMPTY_EQUIPPED,
+        equipped,
+        inventory: inst,
+        heroClass: selectedClass.id,
       });
+
+      await setDoc(
+        profileRef,
+        {
+          authUid: uid,
+          username: trimmed,
+          class: selectedClass.id,
+          stats: selectedClass.stats,
+          level: 1,
+          xp: 0,
+          xpToNext: xpToNextForCurrentLevel(1),
+          gold: INITIAL_USER_GOLD,
+          energy: INITIAL_USER_ENERGY,
+          rankPoints: 0,
+          wins: 0,
+          losses: 0,
+          inventory: inventoryToFirestore(inst),
+          equipped,
+          shop: { items: [], lastRefresh: null },
+          effectiveStats,
+          lastEnergyUpdate: serverTimestamp(),
+          ...(!profileSnap.exists() && !legacySnap.exists()
+            ? { createdAt: serverTimestamp() }
+            : !profileSnap.exists() && legacySnap.exists()
+              ? {
+                  createdAt:
+                    legacySnap.data()?.createdAt ?? serverTimestamp(),
+                }
+              : {}),
+        },
+        { merge: true },
+      );
+
+      await setDoc(userAuthIndexDocRef(uid), { profileId: profileDocId });
+
+      if (profileDocId !== uid && legacySnap.exists()) {
+        await deleteDoc(legacyRef);
+      }
+
       await persistEffectiveCombatStats(uid);
       onSaved();
     } catch (e) {

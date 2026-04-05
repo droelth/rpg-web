@@ -1,4 +1,4 @@
-import { doc, getDoc, updateDoc } from "firebase/firestore";
+import { getDoc, updateDoc } from "firebase/firestore";
 import type { EquippedState, InventoryInstance, Item, ItemStats, ItemType } from "@/types/item";
 import { EMPTY_EQUIPPED, SLOT_ORDER } from "@/types/item";
 import {
@@ -13,6 +13,7 @@ import {
 } from "@/lib/items";
 import { effectiveItemStatsForInstance } from "@/lib/itemRarityStats";
 import { getDb } from "./firebase";
+import { getUserProfileDocRef } from "./userProfileFirestore";
 
 export type CombatTotals = {
   hp: number;
@@ -83,7 +84,7 @@ export class EquipClassMismatchError extends Error {
 }
 
 export async function equipItem(uid: string, instanceId: string): Promise<void> {
-  const ref = doc(getDb(), "users", uid);
+  const ref = await getUserProfileDocRef(uid);
   const snap = await getDoc(ref);
   if (!snap.exists()) throw new Error("User not found");
   const data = snap.data() as Record<string, unknown>;
@@ -218,7 +219,7 @@ export function parseStoredEffectiveStats(raw: unknown): CombatTotals | null {
 
 /** Recompute from base + equipped and save `effectiveStats` on the user doc. */
 export async function persistEffectiveCombatStats(uid: string): Promise<CombatTotals> {
-  const ref = doc(getDb(), "users", uid);
+  const ref = await getUserProfileDocRef(uid);
   const snap = await getDoc(ref);
   if (!snap.exists()) {
     return getEffectiveCombatTotals({
@@ -392,7 +393,7 @@ function inventoryNeedsBlobMigration(raw: unknown): boolean {
  * Persist default inventory + equipped; migrate legacy inventory / assign real instance UUIDs.
  */
 export async function ensureInventoryDefaults(uid: string): Promise<void> {
-  const ref = doc(getDb(), "users", uid);
+  const ref = await getUserProfileDocRef(uid);
   const snap = await getDoc(ref);
   if (!snap.exists()) return;
   const d = snap.data();

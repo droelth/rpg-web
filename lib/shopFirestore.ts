@@ -5,6 +5,7 @@ import {
   parseInventory,
 } from "@/lib/items";
 import { getDb } from "@/lib/firebase";
+import { getUserProfileDocRef } from "@/lib/userProfileFirestore";
 import {
   generateShop,
   MANUAL_REFRESH_COST,
@@ -33,7 +34,7 @@ export async function transactionManualRefreshShop(
   classId: string | null,
 ): Promise<void> {
   const db = getDb();
-  const ref = doc(db, "users", uid);
+  const ref = await getUserProfileDocRef(uid);
   await runTransaction(db, async (transaction) => {
     const snap = await transaction.get(ref);
     if (!snap.exists()) throw new ShopOfferError("User not found");
@@ -59,7 +60,7 @@ export async function transactionPurchaseShopSlot(
   slotIndex: number,
 ): Promise<void> {
   const db = getDb();
-  const ref = doc(db, "users", uid);
+  const ref = await getUserProfileDocRef(uid);
   await runTransaction(db, async (transaction) => {
     const snap = await transaction.get(ref);
     if (!snap.exists()) throw new ShopOfferError("User not found");

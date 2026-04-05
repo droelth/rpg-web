@@ -6,6 +6,7 @@ import {
   timestampToMillis,
 } from "@/lib/energySystem";
 import { getDb } from "./firebase";
+import { getUserProfileDocRef } from "./userProfileFirestore";
 import { applyLevelUp, parseUserLevelFields } from "./levelSystem";
 import { persistEffectiveCombatStats } from "./inventoryUtils";
 
@@ -32,7 +33,7 @@ function readNonNegIntField(
  */
 export async function transactionConsumePvpEnergy(uid: string): Promise<void> {
   const db = getDb();
-  const ref = doc(db, "users", uid);
+  const ref = await getUserProfileDocRef(uid);
   const nowMs = Date.now();
 
   await runTransaction(db, async (transaction) => {
@@ -75,7 +76,7 @@ export async function persistPvpBattleResult(
   input: PersistPvpResultInput,
 ): Promise<void> {
   const db = getDb();
-  const ref = doc(db, "users", uid);
+  const ref = await getUserProfileDocRef(uid);
   await runTransaction(db, async (transaction) => {
     const snap = await transaction.get(ref);
     if (!snap.exists()) throw new Error("User not found");

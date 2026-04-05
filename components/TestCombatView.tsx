@@ -7,6 +7,7 @@ import { CombatAnimatedLog } from "@/components/combat/CombatAnimatedLog";
 import {
   decideFirstTurn,
   runCombatStep,
+  simulateCombatToWinner,
   type Fighter,
   type Stats,
 } from "@/lib/combat";
@@ -185,26 +186,13 @@ export function TestCombatView() {
     if (!player || !enemy || isFinished) return;
     clearCombatTimer();
 
-    let p = player;
-    let e = enemy;
-    let t = turn;
-    let w: "player" | "enemy" | null = null;
-    const newTexts: string[] = [];
+    const result = simulateCombatToWinner({ player, enemy, turn });
 
-    while (!w) {
-      const step = runCombatStep({ player: p, enemy: e, turn: t });
-      newTexts.push(...step.logEntries);
-      p = step.player;
-      e = step.enemy;
-      t = step.turn;
-      w = step.winner;
-    }
-
-    setPlayer(p);
-    setEnemy(e);
-    setTurn(t);
-    setLog((prev) => appendCombatLogLines(prev, newTexts));
-    finalizeCombat(w);
+    setPlayer(result.player);
+    setEnemy(result.enemy);
+    setTurn(result.turn);
+    setLog((prev) => appendCombatLogLines(prev, result.logEntries));
+    finalizeCombat(result.winner);
   }, [player, enemy, turn, isFinished, clearCombatTimer, finalizeCombat]);
 
   if (authError) {

@@ -7,6 +7,7 @@ import {
   parseInventory,
 } from "@/lib/items";
 import { getDb } from "./firebase";
+import { getUserProfileDocRef } from "./userProfileFirestore";
 import { parseEquipped } from "./inventoryUtils";
 import {
   forgeAttemptSucceeds,
@@ -54,7 +55,7 @@ export async function transactionForgeMerge(
   selectedInstanceIds: string[],
 ): Promise<{ outcome: ForgeMergeOutcome }> {
   const db = getDb();
-  const ref = doc(db, "users", uid);
+  const ref = await getUserProfileDocRef(uid);
 
   let outcome: ForgeMergeOutcome = "upgraded";
 
