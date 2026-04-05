@@ -5,10 +5,15 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { AnimatedHpBar } from "@/components/combat/AnimatedHpBar";
 import { CombatAnimatedLog } from "@/components/combat/CombatAnimatedLog";
 import {
+  advanceHpStagnationAfterStep,
+  createHpStagnationState,
   decideFirstTurn,
+  MAX_COMBAT_RESOLUTION_STEPS,
   runCombatStep,
   simulateCombatToWinner,
+  STALEMATE_LOG_LINE,
   type Fighter,
+  type HpStagnationState,
   type Stats,
 } from "@/lib/combat";
 import {
@@ -42,7 +47,9 @@ export function TestCombatView() {
   const [enemy, setEnemy] = useState<Fighter | null>(null);
   const [turn, setTurn] = useState<"player" | "enemy">("player");
   const [log, setLog] = useState<CombatLogLine[]>([]);
-  const [winner, setWinner] = useState<"player" | "enemy" | null>(null);
+  const [winner, setWinner] = useState<
+    "player" | "enemy" | "stalemate" | null
+  >(null);
   const [isRunning, setIsRunning] = useState(false);
   const [speed, setSpeed] = useState<1 | 2>(1);
   const [levelProgress, setLevelProgress] = useState<{
@@ -53,6 +60,8 @@ export function TestCombatView() {
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const logScrollRef = useRef<HTMLUListElement | null>(null);
+  const stagnationRef = useRef<HpStagnationState | null>(null);
+  const testAutoStepCountRef = useRef(0);
 
   const isFinished = winner !== null;
 
@@ -61,6 +70,11 @@ export function TestCombatView() {
       clearTimeout(timerRef.current);
       timerRef.current = null;
     }
+  }, []);
+
+  const finalizeStalemate = useCallback(() => {
+    setWinner("stalemate");
+    setIsRunning(false);
   }, []);
 
   const finalizeCombat = useCallback(
@@ -139,6 +153,8 @@ export function TestCombatView() {
           ]),
         );
         setWinner(null);
+        stagnationRef.current = createHpStagnationState(p, e);
+        testAutoStepCountRef.current = 0;
         setIsRunning(true);
       } catch (e) {
         console.error(e);
@@ -159,6 +175,15 @@ export function TestCombatView() {
     const delayMs = 1000 / speed;
     const id = setTimeout(() => {
       timerRef.current = null;
+      testAutoStepCountRef.current += 1;
+      if (testAutoStepCountRef.current > MAX_COMBAT_RESOLUTION_STEPS) {
+        setLog((prev) =>
+          appendCombatLogLines(prev, [STALEMATE_LOG_LINE]),
+        );
+        finalizeStalemate();
+        return;
+      }
+
       const step = runCombatStep({ player, enemy, turn });
       setPlayer(step.player);
       setEnemy(step.enemy);
@@ -166,6 +191,23 @@ export function TestCombatView() {
       setLog((prev) => appendCombatLogLines(prev, step.logEntries));
       if (step.winner) {
         finalizeCombat(step.winner);
+        return;
+      }
+
+      const st = stagnationRef.current;
+      if (st) {
+        const adv = advanceHpStagnationAfterStep(
+          step.player,
+          step.enemy,
+          st,
+        );
+        stagnationRef.current = adv.next;
+        if (adv.stalemate) {
+          setLog((prev) =>
+            appendCombatLogLines(prev, [adv.logLine]),
+          );
+          finalizeStalemate();
+        }
       }
     }, delayMs);
 
@@ -174,7 +216,16 @@ export function TestCombatView() {
       clearTimeout(id);
       if (timerRef.current === id) timerRef.current = null;
     };
-  }, [isRunning, isFinished, speed, turn, player, enemy, finalizeCombat]);
+  }, [
+    isRunning,
+    isFinished,
+    speed,
+    turn,
+    player,
+    enemy,
+    finalizeCombat,
+    finalizeStalemate,
+  ]);
 
   useLayoutEffect(() => {
     const el = logScrollRef.current;
@@ -192,8 +243,20 @@ export function TestCombatView() {
     setEnemy(result.enemy);
     setTurn(result.turn);
     setLog((prev) => appendCombatLogLines(prev, result.logEntries));
+    if (result.kind === "stalemate") {
+      finalizeStalemate();
+      return;
+    }
     finalizeCombat(result.winner);
-  }, [player, enemy, turn, isFinished, clearCombatTimer, finalizeCombat]);
+  }, [
+    player,
+    enemy,
+    turn,
+    isFinished,
+    clearCombatTimer,
+    finalizeCombat,
+    finalizeStalemate,
+  ]);
 
   if (authError) {
     return (
@@ -316,7 +379,11 @@ export function TestCombatView() {
 
       {winner ? (
         <p className="text-center text-base font-semibold text-amber-400">
-          {winner === "player" ? "You win!" : "You lose!"}
+          {winner === "stalemate"
+            ? "Stalemate — no XP recorded."
+            : winner === "player"
+              ? "You win!"
+              : "You lose!"}
         </p>
       ) : null}
 

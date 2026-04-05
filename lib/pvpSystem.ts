@@ -88,10 +88,22 @@ export function computePvpRankDeltaLoss(
 
 export type PvpRewardBreakdown = {
   won: boolean;
+  /** Draw: no stat changes (energy was still spent to start the match). */
+  stalemate?: boolean;
   xpGain: number;
   goldDelta: number;
   rankDelta: number;
 };
+
+export function buildPvpStalemateRewards(): PvpRewardBreakdown {
+  return {
+    won: false,
+    stalemate: true,
+    xpGain: 0,
+    goldDelta: 0,
+    rankDelta: 0,
+  };
+}
 
 export function buildPvpRewards(
   won: boolean,

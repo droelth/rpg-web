@@ -130,39 +130,157 @@ export function runCombatStep(state: RunCombatStepState): RunCombatStepResult {
 }
 
 /**
- * When both sides deal 0 damage every turn (e.g. def ≥ atk for both), combat never ends.
- * Skip-to-end runs this many steps synchronously; auto-combat uses the same cap per stage.
+ * Last-resort cap for skip simulation only (HP rules should end combat first).
  */
-export const MAX_COMBAT_RESOLUTION_STEPS = 12_000;
+export const MAX_COMBAT_RESOLUTION_STEPS = 50_000;
 
-/** Break a damage stalemate: higher current HP wins; tie is random. */
-export function resolveStalemateWinner(
-  player: Fighter,
-  enemy: Fighter,
-): CombatTurn {
-  if (player.currentHp > enemy.currentHp) return "player";
-  if (player.currentHp < enemy.currentHp) return "enemy";
-  return Math.random() < 0.5 ? "player" : "enemy";
-}
+/** Rounds 1–10: if neither HP changed from fight start → stalemate. */
+export const STAGNATION_CHECK_AFTER_STEP = 10;
 
-/** Appended to the log when {@link MAX_COMBAT_RESOLUTION_STEPS} is hit or skip resolves a stalemate. */
+/** Rounds 10–20: if neither HP changed since end of round 10 → stalemate. */
+export const STAGNATION_SECOND_CHECK_AFTER_STEP = 20;
+
+/** Ten consecutive strikes where both fighters’ HP match the rolling baseline. */
+export const STAGNATION_CONSECUTIVE_STEPS = 10;
+
 export const STALEMATE_LOG_LINE =
-  "Neither side can break the defense—fate declares a victor.";
+  "The fight stops here—neither side can force a result.";
 
-export type SimulateCombatToWinnerResult = {
-  player: Fighter;
-  enemy: Fighter;
-  turn: CombatTurn;
-  winner: CombatTurn;
-  /** All combat lines from simulated steps, plus {@link STALEMATE_LOG_LINE} when applicable. */
-  logEntries: string[];
-  /** True when no normal KO occurred within the step budget. */
-  resolvedByStalemate: boolean;
+export const STALEMATE_LOG_CONSECUTIVE =
+  "Ten blows in a row leave both fighters unchanged—a stalemate.";
+
+export const STALEMATE_LOG_ROUND10 =
+  "After ten rounds no one has lost ground—a stalemate.";
+
+export const STALEMATE_LOG_ROUND20 =
+  "Ten more rounds pass with no change—a stalemate.";
+
+export type HpStagnationState = {
+  initialPlayerHp: number;
+  initialEnemyHp: number;
+  hpAfterRound10Player: number | null;
+  hpAfterRound10Enemy: number | null;
+  rollingBaselinePlayerHp: number;
+  rollingBaselineEnemyHp: number;
+  consecutiveStagnantSteps: number;
+  totalSteps: number;
 };
 
+export function createHpStagnationState(
+  player: Fighter,
+  enemy: Fighter,
+): HpStagnationState {
+  return {
+    initialPlayerHp: player.currentHp,
+    initialEnemyHp: enemy.currentHp,
+    hpAfterRound10Player: null,
+    hpAfterRound10Enemy: null,
+    rollingBaselinePlayerHp: player.currentHp,
+    rollingBaselineEnemyHp: enemy.currentHp,
+    consecutiveStagnantSteps: 0,
+    totalSteps: 0,
+  };
+}
+
+export type StagnationAdvanceResult =
+  | { next: HpStagnationState; stalemate: false }
+  | { next: HpStagnationState; stalemate: true; logLine: string };
+
 /**
- * Fast-forward combat until a KO or until {@link MAX_COMBAT_RESOLUTION_STEPS}, then
- * {@link resolveStalemateWinner}. Use for Skip.
+ * Call once per {@link runCombatStep} with fighters **after** that step.
+ * Stalemate if: 10 strikes in a row with no HP change, or no HP change over rounds 1–10,
+ * or no HP change over rounds 10–20 (vs HP snapshot after round 10).
+ */
+export function advanceHpStagnationAfterStep(
+  afterPlayer: Fighter,
+  afterEnemy: Fighter,
+  prev: HpStagnationState,
+): StagnationAdvanceResult {
+  const totalSteps = prev.totalSteps + 1;
+
+  const sameRolling =
+    afterPlayer.currentHp === prev.rollingBaselinePlayerHp &&
+    afterEnemy.currentHp === prev.rollingBaselineEnemyHp;
+
+  let rollingBaselinePlayerHp = prev.rollingBaselinePlayerHp;
+  let rollingBaselineEnemyHp = prev.rollingBaselineEnemyHp;
+  let consecutiveStagnantSteps = prev.consecutiveStagnantSteps;
+
+  if (!sameRolling) {
+    rollingBaselinePlayerHp = afterPlayer.currentHp;
+    rollingBaselineEnemyHp = afterEnemy.currentHp;
+    consecutiveStagnantSteps = 0;
+  } else {
+    consecutiveStagnantSteps = prev.consecutiveStagnantSteps + 1;
+  }
+
+  let hpAfterRound10Player = prev.hpAfterRound10Player;
+  let hpAfterRound10Enemy = prev.hpAfterRound10Enemy;
+
+  if (totalSteps === STAGNATION_CHECK_AFTER_STEP) {
+    hpAfterRound10Player = afterPlayer.currentHp;
+    hpAfterRound10Enemy = afterEnemy.currentHp;
+  }
+
+  const next: HpStagnationState = {
+    initialPlayerHp: prev.initialPlayerHp,
+    initialEnemyHp: prev.initialEnemyHp,
+    totalSteps,
+    rollingBaselinePlayerHp,
+    rollingBaselineEnemyHp,
+    consecutiveStagnantSteps,
+    hpAfterRound10Player,
+    hpAfterRound10Enemy,
+  };
+
+  if (consecutiveStagnantSteps >= STAGNATION_CONSECUTIVE_STEPS) {
+    return { next, stalemate: true, logLine: STALEMATE_LOG_CONSECUTIVE };
+  }
+
+  if (totalSteps === STAGNATION_CHECK_AFTER_STEP) {
+    if (
+      afterPlayer.currentHp === prev.initialPlayerHp &&
+      afterEnemy.currentHp === prev.initialEnemyHp
+    ) {
+      return { next, stalemate: true, logLine: STALEMATE_LOG_ROUND10 };
+    }
+  }
+
+  if (
+    totalSteps === STAGNATION_SECOND_CHECK_AFTER_STEP &&
+    prev.hpAfterRound10Player != null &&
+    prev.hpAfterRound10Enemy != null
+  ) {
+    if (
+      afterPlayer.currentHp === prev.hpAfterRound10Player &&
+      afterEnemy.currentHp === prev.hpAfterRound10Enemy
+    ) {
+      return { next, stalemate: true, logLine: STALEMATE_LOG_ROUND20 };
+    }
+  }
+
+  return { next, stalemate: false };
+}
+
+export type SimulateCombatToWinnerResult =
+  | {
+      kind: "ko";
+      player: Fighter;
+      enemy: Fighter;
+      turn: CombatTurn;
+      winner: CombatTurn;
+      logEntries: string[];
+    }
+  | {
+      kind: "stalemate";
+      player: Fighter;
+      enemy: Fighter;
+      turn: CombatTurn;
+      logEntries: string[];
+    };
+
+/**
+ * Fast-forward combat until a KO or HP-based stalemate. Use for Skip.
  */
 export function simulateCombatToWinner(
   state: RunCombatStepState,
@@ -171,45 +289,48 @@ export function simulateCombatToWinner(
   let e = state.enemy;
   let t = state.turn;
   const logEntries: string[] = [];
-  let w: CombatTurn | null = null;
+  let stagnation = createHpStagnationState(p, e);
   let steps = 0;
 
-  while (!w && steps < MAX_COMBAT_RESOLUTION_STEPS) {
+  while (steps < MAX_COMBAT_RESOLUTION_STEPS) {
     steps += 1;
     const step = runCombatStep({ player: p, enemy: e, turn: t });
     logEntries.push(...step.logEntries);
     p = step.player;
     e = step.enemy;
     t = step.turn;
-    w = step.winner;
+
+    if (step.winner) {
+      return {
+        kind: "ko",
+        player: p,
+        enemy: e,
+        turn: t,
+        winner: step.winner,
+        logEntries,
+      };
+    }
+
+    const st = advanceHpStagnationAfterStep(p, e, stagnation);
+    stagnation = st.next;
+    if (st.stalemate) {
+      logEntries.push(st.logLine);
+      return {
+        kind: "stalemate",
+        player: p,
+        enemy: e,
+        turn: t,
+        logEntries,
+      };
+    }
   }
 
-  let resolvedByStalemate = false;
-  if (!w) {
-    w = resolveStalemateWinner(p, e);
-    logEntries.push(STALEMATE_LOG_LINE);
-    resolvedByStalemate = true;
-  }
-
+  logEntries.push(STALEMATE_LOG_LINE);
   return {
+    kind: "stalemate",
     player: p,
     enemy: e,
     turn: t,
-    winner: w,
     logEntries,
-    resolvedByStalemate,
-  };
-}
-
-/**
- * After real-time combat hits {@link MAX_COMBAT_RESOLUTION_STEPS} without a KO,
- * declare a victor without re-simulating (same rule as skip stalemate).
- */
-export function resolveCombatStalemateFromState(
-  state: RunCombatStepState,
-): { winner: CombatTurn; logEntries: string[] } {
-  return {
-    winner: resolveStalemateWinner(state.player, state.enemy),
-    logEntries: [STALEMATE_LOG_LINE],
   };
 }

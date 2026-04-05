@@ -6,13 +6,16 @@ import { AnimatedCombatPortrait } from "@/components/combat/AnimatedCombatPortra
 import { AnimatedHpBar } from "@/components/combat/AnimatedHpBar";
 import { CombatAnimatedLog } from "@/components/combat/CombatAnimatedLog";
 import {
+  advanceHpStagnationAfterStep,
+  createHpStagnationState,
   decideFirstTurn,
   MAX_COMBAT_RESOLUTION_STEPS,
-  resolveCombatStalemateFromState,
   runCombatStep,
   simulateCombatToWinner,
+  STALEMATE_LOG_LINE,
   type CombatAnimationCue,
   type Fighter,
+  type HpStagnationState,
   type Stats,
 } from "@/lib/combat";
 import {
@@ -48,6 +51,7 @@ type Phase =
   | "combat"
   | "reward"
   | "failed"
+  | "stalemate"
   | "claiming";
 
 type PendingReward = {
@@ -86,17 +90,15 @@ export function DungeonView() {
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const logScrollRef = useRef<HTMLUListElement | null>(null);
-  /** Per-stage auto-combat steps; resets on stage/dungeon change. Prevents infinite 0-damage fights. */
+  /** Per-stage HP stagnation tracker; resets when dungeon or stage changes. */
+  const stagnationRef = useRef<HpStagnationState | null>(null);
+  /** Safety cap if stagnation logic ever fails to fire. */
   const autoCombatStepCountRef = useRef(0);
 
   const activeDungeonRef = useRef<DungeonDefinition | null>(null);
   const stageIndexRef = useRef(0);
   activeDungeonRef.current = activeDungeon;
   stageIndexRef.current = stageIndex;
-
-  useEffect(() => {
-    autoCombatStepCountRef.current = 0;
-  }, [stageIndex, activeDungeon?.id]);
 
   const isFinished = winner !== null;
 
@@ -192,6 +194,8 @@ export function DungeonView() {
           first === "player" ? "You take the first turn!" : `${e.name} moves first!`,
         ]),
       );
+      stagnationRef.current = createHpStagnationState(p, e);
+      autoCombatStepCountRef.current = 0;
       setPhase("combat");
       setIsRunning(true);
     },
@@ -243,6 +247,11 @@ export function DungeonView() {
             : `${nextEnemy.name} moves first!`,
         ]),
       );
+      stagnationRef.current = createHpStagnationState(
+        survivingPlayer,
+        nextEnemy,
+      );
+      autoCombatStepCountRef.current = 0;
       setIsRunning(true);
     },
     [],
@@ -263,21 +272,15 @@ export function DungeonView() {
       timerRef.current = null;
       autoCombatStepCountRef.current += 1;
       if (autoCombatStepCountRef.current > MAX_COMBAT_RESOLUTION_STEPS) {
-        const { winner: w, logEntries } = resolveCombatStalemateFromState({
-          player,
-          enemy,
-          turn,
-        });
-        setLog((prev) => appendCombatLogLines(prev, logEntries));
+        setLog((prev) =>
+          appendCombatLogLines(prev, [STALEMATE_LOG_LINE]),
+        );
         setLastCue(null);
+        setPlayer(player);
+        setEnemy(enemy);
+        setTurn(turn);
         setIsRunning(false);
-        if (w === "player") {
-          setWinner("player");
-          handlePlayerWonStage(player);
-        } else {
-          setWinner("enemy");
-          handleCombatLoss();
-        }
+        setPhase("stalemate");
         return;
       }
 
@@ -298,6 +301,24 @@ export function DungeonView() {
         setWinner("enemy");
         setIsRunning(false);
         handleCombatLoss();
+      } else {
+        const stRef = stagnationRef.current;
+        if (stRef) {
+          const adv = advanceHpStagnationAfterStep(
+            step.player,
+            step.enemy,
+            stRef,
+          );
+          stagnationRef.current = adv.next;
+          if (adv.stalemate) {
+            setLog((prev) =>
+              appendCombatLogLines(prev, [adv.logLine]),
+            );
+            setLastCue(null);
+            setIsRunning(false);
+            setPhase("stalemate");
+          }
+        }
       }
     }, delayMs);
 
@@ -329,9 +350,15 @@ export function DungeonView() {
     setPlayer(result.player);
     setEnemy(result.enemy);
     setTurn(result.turn);
-    setWinner(result.winner);
     setIsRunning(false);
 
+    if (result.kind === "stalemate") {
+      setWinner(null);
+      setPhase("stalemate");
+      return;
+    }
+
+    setWinner(result.winner);
     if (result.winner === "player") {
       handlePlayerWonStage(result.player);
     } else {
@@ -364,6 +391,8 @@ export function DungeonView() {
     setIsRunning(false);
     setActiveMobType(null);
     statsSnapshotRef.current = null;
+    stagnationRef.current = null;
+    autoCombatStepCountRef.current = 0;
   }, [clearCombatTimer]);
 
   const handleClaimReward = useCallback(async () => {
@@ -679,6 +708,25 @@ export function DungeonView() {
               <h2 className="text-xl font-bold text-rose-300">Dungeon Failed</h2>
               <p className="text-center text-sm text-zinc-400">
                 You were defeated. No rewards.
+              </p>
+              <button
+                type="button"
+                onClick={resetToHub}
+                className="rounded-xl border border-zinc-600 bg-zinc-800 px-6 py-3 text-sm font-semibold text-zinc-100 hover:bg-zinc-700"
+              >
+                Back to dungeons
+              </button>
+            </div>
+          )}
+
+          {phase === "stalemate" && activeDungeon && (
+            <div className="flex flex-col items-center gap-4 rounded-2xl border border-amber-500/40 bg-zinc-900/95 p-8">
+              <h2 className="text-xl font-bold text-amber-200">Stalemate</h2>
+              <p className="text-center text-sm text-zinc-400">
+                Neither side could finish the fight. The run ends with no rewards.
+              </p>
+              <p className="text-center text-xs text-zinc-500">
+                {activeDungeon.name}
               </p>
               <button
                 type="button"

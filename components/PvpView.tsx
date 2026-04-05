@@ -13,10 +13,15 @@ import {
   useState,
 } from "react";
 import {
+  advanceHpStagnationAfterStep,
+  createHpStagnationState,
   decideFirstTurn,
+  MAX_COMBAT_RESOLUTION_STEPS,
   runCombatStep,
+  STALEMATE_LOG_LINE,
   type CombatAnimationCue,
   type Fighter,
+  type HpStagnationState,
   type Stats,
 } from "@/lib/combat";
 import {
@@ -30,6 +35,7 @@ import { getOrCreateUser, type UserDocument } from "@/lib/getOrCreateUser";
 import { ensureInventoryDefaults } from "@/lib/inventoryUtils";
 import {
   buildPvpRewards,
+  buildPvpStalemateRewards,
   getRandomOpponent,
   type PvpOpponentSnapshot,
   type PvpRewardBreakdown,
@@ -119,6 +125,8 @@ export function PvpView() {
 
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const logScrollRef = useRef<HTMLUListElement | null>(null);
+  const pvpStagnationRef = useRef<HpStagnationState | null>(null);
+  const pvpAutoStepCountRef = useRef(0);
   const isFinished = winner !== null;
 
   const refreshUser = useCallback(async (uid: string) => {
@@ -158,6 +166,13 @@ export function PvpView() {
     }
   }, []);
 
+  const finalizeStalemate = useCallback(() => {
+    setWinner(null);
+    setIsRunning(false);
+    setRewards(buildPvpStalemateRewards());
+    setPhase("result");
+  }, []);
+
   const finalizeCombat = useCallback(
     (w: "player" | "enemy", opp: PvpOpponentSnapshot, pLevel: number) => {
       setWinner(w);
@@ -193,6 +208,15 @@ export function PvpView() {
     const delayMs = 900;
     const id = setTimeout(() => {
       timerRef.current = null;
+      pvpAutoStepCountRef.current += 1;
+      if (pvpAutoStepCountRef.current > MAX_COMBAT_RESOLUTION_STEPS) {
+        setLog((prev) =>
+          appendCombatLogLines(prev, [STALEMATE_LOG_LINE]),
+        );
+        finalizeStalemate();
+        return;
+      }
+
       const step = runCombatStep({ player, enemy, turn });
       setStrikeSeq((n) => n + 1);
       setLastCue(step.animationCue);
@@ -200,8 +224,26 @@ export function PvpView() {
       setEnemy(step.enemy);
       setTurn(step.turn);
       setLog((prev) => appendCombatLogLines(prev, step.logEntries));
+
       if (step.winner && opponent) {
         finalizeCombat(step.winner, opponent, playerLevelAtMatch);
+        return;
+      }
+
+      const st = pvpStagnationRef.current;
+      if (st) {
+        const adv = advanceHpStagnationAfterStep(
+          step.player,
+          step.enemy,
+          st,
+        );
+        pvpStagnationRef.current = adv.next;
+        if (adv.stalemate) {
+          setLog((prev) =>
+            appendCombatLogLines(prev, [adv.logLine]),
+          );
+          finalizeStalemate();
+        }
       }
     }, delayMs);
 
@@ -220,6 +262,7 @@ export function PvpView() {
     opponent,
     playerLevelAtMatch,
     finalizeCombat,
+    finalizeStalemate,
   ]);
 
   useLayoutEffect(() => {
@@ -288,6 +331,8 @@ export function PvpView() {
       );
       setWinner(null);
       setRewards(null);
+      pvpAutoStepCountRef.current = 0;
+      pvpStagnationRef.current = createHpStagnationState(p, e);
       setPhase("battle");
       setIsRunning(true);
     } catch (e) {
@@ -315,6 +360,8 @@ export function PvpView() {
     setRewards(null);
     setIsRunning(false);
     setLoadError(null);
+    pvpStagnationRef.current = null;
+    pvpAutoStepCountRef.current = 0;
   }
 
   if (authError) {
@@ -596,24 +643,35 @@ export function PvpView() {
               </div>
             ) : null}
             <h2 className="text-2xl font-bold text-zinc-50">
-              {rewards.won ? "Victory" : "Defeat"}
+              {rewards.stalemate
+                ? "Stalemate"
+                : rewards.won
+                  ? "Victory"
+                  : "Defeat"}
             </h2>
-            <div className="rounded-2xl border border-white/10 bg-zinc-900/60 p-4 text-left text-sm">
-              <p className="text-zinc-400">Rewards</p>
-              <ul className="mt-2 space-y-1 text-zinc-200">
-                <li>XP: +{rewards.xpGain}</li>
-                {rewards.goldDelta !== 0 ? (
+            {rewards.stalemate ? (
+              <p className="text-center text-sm text-zinc-400">
+                No XP, gold, or rank change. Energy was still spent to enter this
+                match.
+              </p>
+            ) : (
+              <div className="rounded-2xl border border-white/10 bg-zinc-900/60 p-4 text-left text-sm">
+                <p className="text-zinc-400">Rewards</p>
+                <ul className="mt-2 space-y-1 text-zinc-200">
+                  <li>XP: +{rewards.xpGain}</li>
+                  {rewards.goldDelta !== 0 ? (
+                    <li>
+                      Gold: {rewards.goldDelta > 0 ? "+" : ""}
+                      {rewards.goldDelta}
+                    </li>
+                  ) : null}
                   <li>
-                    Gold: {rewards.goldDelta > 0 ? "+" : ""}
-                    {rewards.goldDelta}
+                    Rank: {rewards.rankDelta > 0 ? "+" : ""}
+                    {rewards.rankDelta}
                   </li>
-                ) : null}
-                <li>
-                  Rank: {rewards.rankDelta > 0 ? "+" : ""}
-                  {rewards.rankDelta}
-                </li>
-              </ul>
-            </div>
+                </ul>
+              </div>
+            )}
             <button
               type="button"
               onClick={handleBackToHub}
